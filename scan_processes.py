@@ -46,7 +46,8 @@ high_disk_write_rate_threshold = DEFAULT_CONFIG['high_disk_write_rate_threshold'
 high_disk_read_rate_threshold = DEFAULT_CONFIG['high_disk_read_rate_threshold']
 high_disk_cumulative_threshold = DEFAULT_CONFIG['high_disk_cumulative_threshold']
 # Normalize whitelist to lowercase for case-insensitive matching
-disk_io_whitelist = set(item.lower() for item in DEFAULT_CONFIG['disk_io_whitelist'])
+# Convert to string to handle any type gracefully
+disk_io_whitelist = set(str(item).lower() for item in DEFAULT_CONFIG['disk_io_whitelist'] if item)
 connection_count = 0
 
 # Track previous I/O counters for rate calculation
@@ -95,10 +96,11 @@ def load_config(config_file):
         whitelist_value = config['disk_io_whitelist']
         if isinstance(whitelist_value, list):
             # Normalize all entries to lowercase for case-insensitive matching
-            disk_io_whitelist = set(item.lower() for item in whitelist_value)
+            # Convert to string first to handle non-string items gracefully
+            disk_io_whitelist = set(str(item).lower() for item in whitelist_value if item)
         else:
             logging.warning("Config value for 'disk_io_whitelist' is not a list; using default whitelist.")
-            disk_io_whitelist = set(item.lower() for item in DEFAULT_CONFIG['disk_io_whitelist'])
+            disk_io_whitelist = set(str(item).lower() for item in DEFAULT_CONFIG['disk_io_whitelist'] if item)
         
         logging.info(f"Configuration loaded from {config_file}")
         return config
