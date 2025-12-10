@@ -7,6 +7,10 @@ import os
 import sys
 import platform
 
+# Platform-specific imports
+if platform.system() == 'Windows':
+    import ctypes
+
 wait_time = 10
 # Parameters for detection
 high_cpu_threshold = 80  # Percentage
@@ -18,7 +22,6 @@ def is_admin():
     """Check if the script is running with administrative/root privileges."""
     try:
         if platform.system() == 'Windows':
-            import ctypes
             return ctypes.windll.shell32.IsUserAnAdmin() != 0
         else:
             # On Unix-like systems, check if effective user ID is 0 (root)
@@ -33,7 +36,7 @@ def request_admin_privileges():
     if current_platform == 'Windows':
         # On Windows, try to re-launch the script with elevated privileges
         try:
-            import ctypes
+            # ShellExecuteW returns > 32 on success (Windows API behavior)
             if ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(sys.argv), None, 1) > 32:
                 sys.exit(0)
             else:
@@ -94,6 +97,9 @@ if hasattr(socket, 'AF_PACKET'):
     families[socket.AF_PACKET] = 'Packet'
 
 # Global database connection variables (initialized in main)
+# Note: Global state is used here for simplicity as the connection is shared
+# across multiple monitoring functions. This is acceptable for a single-threaded
+# monitoring script with a single database connection.
 conn = None
 cursor = None
 
