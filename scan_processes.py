@@ -16,11 +16,8 @@ wait_time = 10
 # Parameters for detection
 high_cpu_threshold = 80  # Percentage
 high_memory_threshold = 70  # Percentage
-high_disk_threshold = 50  # MB/s
+high_disk_threshold = 50  # MB (cumulative writes)
 connection_count = 0
-
-# Track previous I/O counters for rate calculation
-prev_io_counters = {}
 
 def is_admin():
     """Check if the script is running with administrative/root privileges."""
@@ -143,16 +140,12 @@ def monitor_processes():
     Note: CPU measurements via process_iter use non-blocking mode and may not be 
     accurate on first iteration. Subsequent iterations will have accurate measurements.
     """
-    global prev_io_counters
     process_count = 0
-    current_pids = set()
   
     for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent', 'io_counters']):
         try:
             cpu_usage = proc.info['cpu_percent']
             memory_usage = proc.info['memory_percent']
-            pid = proc.info['pid']
-            current_pids.add(pid)
             
             # Track if this process should be investigated
             should_investigate = False
@@ -171,25 +164,13 @@ def monitor_processes():
             # Check io_counters (may be None on some platforms without proper permissions)
             if proc.info['io_counters'] is not None:
                 write_bytes = proc.info['io_counters'].write_bytes
-                
-                # Calculate write rate (MB/s) by comparing to previous iteration
-                if pid in prev_io_counters:
-                    prev_write_bytes = prev_io_counters[pid]
-                    bytes_written = write_bytes - prev_write_bytes
-                    
-                    # Handle counter reset (process restart with same PID or overflow)
-                    # If bytes_written is negative or wait_time is invalid, reset baseline
-                    if bytes_written >= 0 and wait_time > 0:
-                        # Calculate MB/s over the wait_time interval
-                        write_mb_per_sec = (bytes_written / 1024 / 1024) / wait_time
-                        
-                        if write_mb_per_sec > high_disk_threshold:
-                            insert_event(proc, "High Disk Write", write_mb_per_sec)
-                            process_count += 1
-                            should_investigate = True
-                
-                # Store current value for next iteration
-                prev_io_counters[pid] = write_bytes
+                # Avoid division if write_bytes is 0 or very small
+                if write_bytes > 0:
+                    write_mb = write_bytes / 1024 / 1024
+                    if write_mb > high_disk_threshold:  # Convert bytes to MB
+                        insert_event(proc, "High Disk Write", write_mb)
+                        process_count += 1
+                        should_investigate = True
             
             # Only investigate once per process, even if multiple thresholds exceeded
             if should_investigate:
@@ -202,11 +183,6 @@ def monitor_processes():
             # Log unexpected errors but continue monitoring
             print(f"\nError monitoring process: {e}", file=sys.stderr)
             continue
-    
-    # Clean up terminated processes from prev_io_counters to prevent memory leak
-    terminated_pids = set(prev_io_counters.keys()) - current_pids
-    for pid in terminated_pids:
-        del prev_io_counters[pid]
 
 def investigate_process(proc, process_count):
     global connection_count

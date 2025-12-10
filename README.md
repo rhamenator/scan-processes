@@ -102,7 +102,7 @@ You can modify the following parameters at the top of `scan_processes.py`:
 - `wait_time`: Interval in seconds between process scans (default: 10 seconds)
 - `high_cpu_threshold`: CPU usage percentage to trigger an alert (default: 80%)
 - `high_memory_threshold`: Memory usage percentage to trigger an alert (default: 70%)
-- `high_disk_threshold`: Disk write speed in MB/s to trigger an alert (default: 50 MB/s)
+- `high_disk_threshold`: Cumulative disk writes in MB to trigger an alert (default: 50 MB)
 
 ## Important Notes
 
@@ -114,7 +114,8 @@ You can modify the following parameters at the top of `scan_processes.py`:
 - **Continuous Monitoring:** The script runs continuously until interrupted with `Ctrl+C`
 - **Monitoring Behavior:** 
   - CPU and memory usage are measured at each scan interval
-  - Disk write speed (MB/s) is calculated between consecutive scans, so disk alerts won't appear until the second iteration
+  - Disk monitoring tracks cumulative bytes written by a process since it started
+  - Processes that have written more than the threshold (in total) will trigger an alert
 - **Performance Impact:** Monitoring can consume system resources; adjust `wait_time` if needed
 
 ## Troubleshooting
