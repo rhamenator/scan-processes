@@ -3,6 +3,14 @@ import time
 import socket
 import ipaddress
 import sqlite3
+import os
+import sys
+import platform
+import subprocess
+
+# Platform-specific imports
+if platform.system() == 'Windows':
+    import ctypes
 
 wait_time = 10
 # Parameters for detection
@@ -11,90 +19,216 @@ high_memory_threshold = 70  # Percentage
 high_disk_threshold = 50  # MB/s
 connection_count = 0
 
+def is_admin():
+    """Check if the script is running with administrative/root privileges."""
+    try:
+        if platform.system() == 'Windows':
+            return ctypes.windll.shell32.IsUserAnAdmin() != 0
+        else:
+            # On Unix-like systems, check if effective user ID is 0 (root)
+            return os.geteuid() == 0
+    except Exception:
+        return False
+
+def request_admin_privileges():
+    """Request admin privileges or display appropriate message based on platform."""
+    current_platform = platform.system()
+    
+    if current_platform == 'Windows':
+        # On Windows, try to re-launch the script with elevated privileges
+        try:
+            # Use subprocess.list2cmdline to properly escape arguments with spaces
+            # ShellExecuteW returns > 32 on success (Windows API behavior)
+            args = subprocess.list2cmdline(sys.argv)
+            if ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, args, None, 1) > 32:
+                sys.exit(0)
+            else:
+                print("\n" + "="*70)
+                print("ERROR: Administrator privileges are required!")
+                print("="*70)
+                print("\nThis script needs to run with administrator privileges to access")
+                print("detailed process information and network connections.")
+                print("\nPlease right-click on the script and select 'Run as administrator'")
+                print("or run it from an elevated command prompt/PowerShell.")
+                print("="*70)
+                sys.exit(1)
+        except Exception as e:
+            print(f"\nFailed to elevate privileges: {e}")
+            print("\nPlease run this script as Administrator.")
+            sys.exit(1)
+    else:
+        # On Linux/macOS, display instructions to run with sudo
+        print("\n" + "="*70)
+        print("ERROR: Root/sudo privileges are required!")
+        print("="*70)
+        print("\nThis script needs to run with elevated privileges to access:")
+        print("  - Disk I/O statistics (io_counters)")
+        print("  - Network connections for all processes")
+        print("  - Detailed process information")
+        print("\nPlease run the script with sudo:")
+        print(f"  sudo {sys.executable} {' '.join(sys.argv)}")
+        print("="*70)
+        sys.exit(1)
+
+# Build families dictionary dynamically based on available socket families
 families = {
     socket.AF_INET: 'IPv4',
     socket.AF_INET6: 'IPv6',
-    socket.AF_APPLETALK: 'AppleTalk',
-    socket.AF_BLUETOOTH: 'Bluetooth',
-    socket.AF_DECnet: 'DECnet',
-    socket.AF_HYPERV: 'HyperV',
-    socket.AF_IPX: 'IPX',
-    socket.AF_IRDA: 'IRDA',
-    socket.AF_LINK: 'Link',
-    socket.AF_SNA: 'SNA',
     socket.AF_UNSPEC: 'Unspecified',
 }
 
-# Create or connect to the SQLite database
-conn = sqlite3.connect('process_monitor.db')
-cursor = conn.cursor()
+# Add platform-specific socket families if they exist
+if hasattr(socket, 'AF_APPLETALK'):
+    families[socket.AF_APPLETALK] = 'AppleTalk'
+if hasattr(socket, 'AF_BLUETOOTH'):
+    families[socket.AF_BLUETOOTH] = 'Bluetooth'
+if hasattr(socket, 'AF_DECnet'):
+    families[socket.AF_DECnet] = 'DECnet'
+if hasattr(socket, 'AF_HYPERV'):
+    families[socket.AF_HYPERV] = 'HyperV'
+if hasattr(socket, 'AF_IPX'):
+    families[socket.AF_IPX] = 'IPX'
+if hasattr(socket, 'AF_IRDA'):
+    families[socket.AF_IRDA] = 'IRDA'
+if hasattr(socket, 'AF_LINK'):
+    families[socket.AF_LINK] = 'Link'
+if hasattr(socket, 'AF_SNA'):
+    families[socket.AF_SNA] = 'SNA'
+if hasattr(socket, 'AF_UNIX'):
+    families[socket.AF_UNIX] = 'Unix'
+if hasattr(socket, 'AF_PACKET'):
+    families[socket.AF_PACKET] = 'Packet'
 
-# Create the table if it doesn't exist
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS process_events (
-        timestamp TEXT,
-        pid INTEGER,
-        process_name TEXT,
-        event_type TEXT,
-        resource_usage REAL,
-        open_files TEXT,
-        ip_connection_type TEXT,
-        ip_connection_status TEXT,
-        local_address TEXT,
-        local_port TEXT,
-        remote_address TEXT,
-        remote_port TEXT,
-        remote_hostname TEXT,
-        ip_address_type TEXT,
-        connection_family TEXT
-    )
-''')
-conn.commit()
+# Global database connection variables (initialized in main)
+# Note: Global state is used here for simplicity as the connection is shared
+# across multiple monitoring functions. This is acceptable for a single-threaded
+# monitoring script with a single database connection.
+conn = None
+cursor = None
+
+def init_database():
+    """Initialize the SQLite database connection and create tables."""
+    global conn, cursor
+    conn = sqlite3.connect('process_monitor.db')
+    cursor = conn.cursor()
+    
+    # Create the table if it doesn't exist
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS process_events (
+            timestamp TEXT,
+            pid INTEGER,
+            process_name TEXT,
+            event_type TEXT,
+            resource_usage REAL,
+            open_files TEXT,
+            ip_connection_type TEXT,
+            ip_connection_status TEXT,
+            local_address TEXT,
+            local_port TEXT,
+            remote_address TEXT,
+            remote_port TEXT,
+            remote_hostname TEXT,
+            ip_address_type TEXT,
+            connection_family TEXT
+        )
+    ''')
+    conn.commit()
 
 def monitor_processes():
+    """Monitor all processes for high resource usage and network connections.
+    
+    Note: CPU measurements via process_iter use non-blocking mode and may not be 
+    accurate on first iteration. Subsequent iterations will have accurate measurements.
+    """
     process_count = 0
   
     for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent', 'io_counters']):
-        # Check for high resource usage
-        if proc.info['cpu_percent'] > high_cpu_threshold:
-            insert_event(proc, "High CPU", proc.info['cpu_percent'])
-            process_count +=1
-            investigate_process(proc, process_count)
+        try:
+            cpu_usage = proc.info['cpu_percent']
+            memory_usage = proc.info['memory_percent']
+            
+            # Track if this process should be investigated
+            should_investigate = False
+            
+            # Check for high resource usage
+            if cpu_usage is not None and cpu_usage > high_cpu_threshold:
+                insert_event(proc, "High CPU", cpu_usage)
+                process_count += 1
+                should_investigate = True
 
-        if proc.info['memory_percent'] > high_memory_threshold:
-            insert_event(proc, "High Memory", proc.info['memory_percent'])
-            process_count +=1
-            investigate_process(proc, process_count)
+            if memory_usage is not None and memory_usage > high_memory_threshold:
+                insert_event(proc, "High Memory", memory_usage)
+                process_count += 1
+                should_investigate = True
 
-        if proc.info['io_counters'].write_bytes / 1024 / 1024 > high_disk_threshold:  # Convert bytes to MB
-            insert_event(proc, "High Disk Write", proc.info['io_counters'].write_bytes / 1024 / 1024)
-            process_count +=1
-            investigate_process(proc, process_count)
+            # Check io_counters (may be None on some platforms without proper permissions)
+            if proc.info['io_counters'] is not None:
+                write_bytes = proc.info['io_counters'].write_bytes
+                # Avoid division if write_bytes is 0 or very small
+                if write_bytes > 0:
+                    write_mb = write_bytes / 1024 / 1024
+                    if write_mb > high_disk_threshold:  # Convert bytes to MB
+                        insert_event(proc, "High Disk Write", write_mb)
+                        process_count += 1
+                        should_investigate = True
+            
+            # Only investigate once per process, even if multiple thresholds exceeded
+            if should_investigate:
+                investigate_process(proc, process_count)
+        
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            # Process may have terminated or we don't have access
+            continue
+        except Exception as e:
+            # Log unexpected errors but continue monitoring
+            print(f"\nError monitoring process: {e}", file=sys.stderr)
+            continue
 
 def investigate_process(proc, process_count):
     global connection_count
     try:
-        open_files = ", ".join([file.path for file in proc.open_files()]) if proc.open_files() else "None"
-        # Get network connections
-        connections = [conn for conn in psutil.net_connections() if conn.pid == proc.info['pid']]
+        # Get open files with proper error handling
+        try:
+            open_files_list = proc.open_files()
+            open_files = ", ".join([file.path for file in open_files_list]) if open_files_list else "None"
+        except (psutil.AccessDenied, psutil.NoSuchProcess):
+            open_files = "Access Denied"
+        
+        # Get network connections for this specific process
+        try:
+            # Use net_connections with kind parameter to get process-specific connections
+            # This replaces the deprecated proc.connections() method
+            pid = proc.info['pid']
+            connections = [c for c in psutil.net_connections(kind='inet') if c.pid == pid]
+        except (psutil.AccessDenied, psutil.NoSuchProcess):
+            # If we can't get connections for this process, skip it
+            return
+        
         for conn in connections:
             connection_count += 1
             try:
-                remote_ip = conn.raddr.ip if hasattr(conn.raddr, 'ip') else (conn.raddr[0] if isinstance(conn.raddr, tuple) and len(conn.raddr) > 0 else '')
-                remote_port = conn.raddr.port if hasattr(conn.raddr, 'port') else (conn.raddr[1] if isinstance(conn.raddr, tuple) and len(conn.raddr) > 1 else '')
+                # Extract address information using helper function
+                remote_ip, remote_port = get_address_info(conn.raddr)
+                local_ip, local_port = get_address_info(conn.laddr)
+                
                 connection_family = families.get(conn.family, 'Other')
                 ip_connection_type = get_connection_type(conn)
                 ip_connection_status = conn.status
-                if len(remote_ip) > 0: 
+                
+                if remote_ip and len(remote_ip) > 0: 
                     ip_address_type = get_ip_address_type(remote_ip)
+                    # Avoid blocking DNS lookups - set timeout and catch all exceptions
                     try:
+                        socket.setdefaulttimeout(1.0)  # 1 second timeout
                         remote_hostname = socket.gethostbyaddr(remote_ip)[0]
-                    except socket.herror:
+                    except (socket.herror, socket.gaierror, socket.timeout, OSError):
                         remote_hostname = 'Unresolved'
+                    finally:
+                        socket.setdefaulttimeout(None)  # Reset to default
                 else:
                     ip_address_type = ''
                     remote_hostname = ''
-                    
+                
                 insert_event(
                     proc,
                     "Network Connection",
@@ -102,8 +236,8 @@ def investigate_process(proc, process_count):
                     open_files,
                     ip_connection_type,
                     ip_connection_status,
-                    conn.laddr.ip,
-                    conn.laddr.port,
+                    local_ip,
+                    local_port,
                     remote_ip,
                     remote_port,
                     remote_hostname,
@@ -113,10 +247,19 @@ def investigate_process(proc, process_count):
                 print(f'Processes investigated: {process_count}, {connection_count} connections...', end='\r')                
             
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                pass
+                # Connection or process disappeared
+                continue
+            except Exception as e:
+                # Log unexpected errors but continue
+                print(f"\nError investigating connection: {e}", file=sys.stderr)
+                continue
             
     except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        # Process disappeared or access denied
         pass
+    except Exception as e:
+        # Catch any other unexpected errors
+        print(f"\nError investigating process: {e}", file=sys.stderr)
 
 def get_connection_type(conn):
     if conn.type == socket.SOCK_STREAM:
@@ -125,6 +268,19 @@ def get_connection_type(conn):
         return "UDP"
     else:
         return "Unknown"
+
+def get_address_info(addr):
+    """Extract IP and port from address object (may be None, namedtuple, or tuple)."""
+    if addr is None:
+        return '', ''
+    
+    try:
+        ip = addr.ip if hasattr(addr, 'ip') else (addr[0] if isinstance(addr, tuple) and len(addr) > 0 else '')
+        port = addr.port if hasattr(addr, 'port') else (addr[1] if isinstance(addr, tuple) and len(addr) > 1 else '')
+        return ip, port
+    except (IndexError, AttributeError, TypeError):
+        # Handle unexpected address formats gracefully
+        return '', ''
 
 def get_ip_address_type(ip_str):
     try:
@@ -143,36 +299,74 @@ def get_ip_address_type(ip_str):
         return "Invalid"
 
 def insert_event(proc, event_type, resource_usage, open_files=None, ip_connection_type=None, ip_connection_status=None, local_address=None, local_port=None, remote_address=None, remote_port=None, remote_hostname=None, ip_address_type=None, connection_family=None):
-    cursor.execute('''
-        INSERT INTO process_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (
-        time.strftime('%Y-%m-%d %H:%M:%S'),
-        proc.info['pid'],
-        proc.info['name'],
-        event_type,
-        resource_usage,
-        open_files,
-        ip_connection_type,
-        ip_connection_status,
-        local_address,
-        local_port,
-        remote_address, 
-        remote_port,
-        remote_hostname,
-        ip_address_type,
-        connection_family 
-    ))
-    conn.commit()
+    try:
+        cursor.execute('''
+            INSERT INTO process_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            time.strftime('%Y-%m-%d %H:%M:%S'),
+            proc.info['pid'],
+            proc.info['name'],
+            event_type,
+            resource_usage,
+            open_files,
+            ip_connection_type,
+            ip_connection_status,
+            local_address,
+            local_port,
+            remote_address, 
+            remote_port,
+            remote_hostname,
+            ip_address_type,
+            connection_family 
+        ))
+        # Note: We don't commit here for performance reasons.
+        # Commits are batched in the main loop to reduce I/O overhead.
+    except sqlite3.Error as e:
+        print(f"\nDatabase error: {e}", file=sys.stderr)
+    except Exception as e:
+        print(f"\nUnexpected error inserting event: {e}", file=sys.stderr)
 
 # Main execution
-try:
-    print('Press ctrl+c to exit.')
-    while True:
-        monitor_processes()
-        time.sleep(wait_time)
-except KeyboardInterrupt:
-    print('SQLite database {conn.} has been created.')
-    print("Exiting ...")
-finally:
-    # Close the database connection when the script ends
-    conn.close()
+if __name__ == "__main__":
+    # Check for administrative/root privileges
+    if not is_admin():
+        request_admin_privileges()
+    
+    # Initialize database after privilege check
+    try:
+        init_database()
+    except Exception as e:
+        print(f"\nFailed to initialize database: {e}", file=sys.stderr)
+        sys.exit(1)
+    
+    try:
+        print('Process Monitor started with elevated privileges.')
+        print('Press ctrl+c to exit.')
+        iteration_count = 0
+        while True:
+            monitor_processes()
+            iteration_count += 1
+            
+            # Commit database changes periodically (every iteration) instead of per insert
+            # This significantly improves performance
+            try:
+                if conn:
+                    conn.commit()
+            except sqlite3.Error as e:
+                print(f"\nDatabase commit error: {e}", file=sys.stderr)
+            
+            time.sleep(wait_time)
+    except KeyboardInterrupt:
+        print('\n\nSQLite database "process_monitor.db" has been created.')
+        print("Exiting ...")
+    except Exception as e:
+        print(f"\nUnexpected error in main loop: {e}", file=sys.stderr)
+    finally:
+        # Ensure database is properly closed
+        try:
+            if conn:
+                conn.commit()  # Final commit of any pending data
+                conn.close()
+                print("Database connection closed successfully.")
+        except Exception as e:
+            print(f"Error closing database: {e}", file=sys.stderr)
