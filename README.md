@@ -182,7 +182,7 @@ Edit the `disk_io_whitelist` array in your `config.json`:
 }
 ```
 
-Process names are case-insensitive and should match the process name as shown by the system.
+Process name matching is case-insensitive. Whitelist entries are automatically converted to lowercase for matching, so you can use any case in your configuration.
 
 ## Data Export
 
