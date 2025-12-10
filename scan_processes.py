@@ -11,19 +11,34 @@ high_memory_threshold = 70  # Percentage
 high_disk_threshold = 50  # MB/s
 connection_count = 0
 
+# Build families dictionary dynamically based on available socket families
 families = {
     socket.AF_INET: 'IPv4',
     socket.AF_INET6: 'IPv6',
-    socket.AF_APPLETALK: 'AppleTalk',
-    socket.AF_BLUETOOTH: 'Bluetooth',
-    socket.AF_DECnet: 'DECnet',
-    socket.AF_HYPERV: 'HyperV',
-    socket.AF_IPX: 'IPX',
-    socket.AF_IRDA: 'IRDA',
-    socket.AF_LINK: 'Link',
-    socket.AF_SNA: 'SNA',
     socket.AF_UNSPEC: 'Unspecified',
 }
+
+# Add platform-specific socket families if they exist
+if hasattr(socket, 'AF_APPLETALK'):
+    families[socket.AF_APPLETALK] = 'AppleTalk'
+if hasattr(socket, 'AF_BLUETOOTH'):
+    families[socket.AF_BLUETOOTH] = 'Bluetooth'
+if hasattr(socket, 'AF_DECnet'):
+    families[socket.AF_DECnet] = 'DECnet'
+if hasattr(socket, 'AF_HYPERV'):
+    families[socket.AF_HYPERV] = 'HyperV'
+if hasattr(socket, 'AF_IPX'):
+    families[socket.AF_IPX] = 'IPX'
+if hasattr(socket, 'AF_IRDA'):
+    families[socket.AF_IRDA] = 'IRDA'
+if hasattr(socket, 'AF_LINK'):
+    families[socket.AF_LINK] = 'Link'
+if hasattr(socket, 'AF_SNA'):
+    families[socket.AF_SNA] = 'SNA'
+if hasattr(socket, 'AF_UNIX'):
+    families[socket.AF_UNIX] = 'Unix'
+if hasattr(socket, 'AF_PACKET'):
+    families[socket.AF_PACKET] = 'Packet'
 
 # Create or connect to the SQLite database
 conn = sqlite3.connect('process_monitor.db')
@@ -66,10 +81,13 @@ def monitor_processes():
             process_count +=1
             investigate_process(proc, process_count)
 
-        if proc.info['io_counters'].write_bytes / 1024 / 1024 > high_disk_threshold:  # Convert bytes to MB
-            insert_event(proc, "High Disk Write", proc.info['io_counters'].write_bytes / 1024 / 1024)
-            process_count +=1
-            investigate_process(proc, process_count)
+        # Check io_counters (may be None on some platforms without proper permissions)
+        if proc.info['io_counters'] is not None:
+            write_mb = proc.info['io_counters'].write_bytes / 1024 / 1024
+            if write_mb > high_disk_threshold:  # Convert bytes to MB
+                insert_event(proc, "High Disk Write", write_mb)
+                process_count +=1
+                investigate_process(proc, process_count)
 
 def investigate_process(proc, process_count):
     global connection_count
@@ -95,6 +113,10 @@ def investigate_process(proc, process_count):
                     ip_address_type = ''
                     remote_hostname = ''
                     
+                # Handle laddr which may be None or a tuple
+                local_ip = conn.laddr.ip if hasattr(conn.laddr, 'ip') else (conn.laddr[0] if conn.laddr and isinstance(conn.laddr, tuple) and len(conn.laddr) > 0 else '')
+                local_port = conn.laddr.port if hasattr(conn.laddr, 'port') else (conn.laddr[1] if conn.laddr and isinstance(conn.laddr, tuple) and len(conn.laddr) > 1 else '')
+                
                 insert_event(
                     proc,
                     "Network Connection",
@@ -102,8 +124,8 @@ def investigate_process(proc, process_count):
                     open_files,
                     ip_connection_type,
                     ip_connection_status,
-                    conn.laddr.ip,
-                    conn.laddr.port,
+                    local_ip,
+                    local_port,
                     remote_ip,
                     remote_port,
                     remote_hostname,
@@ -171,7 +193,7 @@ try:
         monitor_processes()
         time.sleep(wait_time)
 except KeyboardInterrupt:
-    print('SQLite database {conn.} has been created.')
+    print('\nSQLite database "process_monitor.db" has been created.')
     print("Exiting ...")
 finally:
     # Close the database connection when the script ends
