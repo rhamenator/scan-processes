@@ -38,6 +38,23 @@ DEFAULT_CONFIG = {
     'statistics_interval': 60  # Show stats every 60 seconds
 }
 
+def normalize_whitelist(items):
+    """Normalize whitelist items to lowercase strings.
+    
+    Args:
+        items: List of whitelist entries (can be mixed types)
+        
+    Returns:
+        Set of normalized lowercase strings, excluding None and empty strings
+    """
+    normalized = set()
+    for item in items:
+        if item is not None:
+            item_str = str(item).strip()
+            if item_str:  # Only add non-empty strings
+                normalized.add(item_str.lower())
+    return normalized
+
 # Global configuration (will be loaded from file or defaults)
 wait_time = DEFAULT_CONFIG['wait_time']
 high_cpu_threshold = DEFAULT_CONFIG['high_cpu_threshold']
@@ -46,8 +63,7 @@ high_disk_write_rate_threshold = DEFAULT_CONFIG['high_disk_write_rate_threshold'
 high_disk_read_rate_threshold = DEFAULT_CONFIG['high_disk_read_rate_threshold']
 high_disk_cumulative_threshold = DEFAULT_CONFIG['high_disk_cumulative_threshold']
 # Normalize whitelist to lowercase for case-insensitive matching
-# Convert to string to handle any type gracefully
-disk_io_whitelist = set(str(item).lower() for item in DEFAULT_CONFIG['disk_io_whitelist'] if item)
+disk_io_whitelist = normalize_whitelist(DEFAULT_CONFIG['disk_io_whitelist'])
 connection_count = 0
 
 # Track previous I/O counters for rate calculation
@@ -95,12 +111,10 @@ def load_config(config_file):
         # Handle whitelist with validation and lowercase normalization
         whitelist_value = config['disk_io_whitelist']
         if isinstance(whitelist_value, list):
-            # Normalize all entries to lowercase for case-insensitive matching
-            # Convert to string first to handle non-string items gracefully
-            disk_io_whitelist = set(str(item).lower() for item in whitelist_value if item)
+            disk_io_whitelist = normalize_whitelist(whitelist_value)
         else:
             logging.warning("Config value for 'disk_io_whitelist' is not a list; using default whitelist.")
-            disk_io_whitelist = set(str(item).lower() for item in DEFAULT_CONFIG['disk_io_whitelist'] if item)
+            disk_io_whitelist = normalize_whitelist(DEFAULT_CONFIG['disk_io_whitelist'])
         
         logging.info(f"Configuration loaded from {config_file}")
         return config
