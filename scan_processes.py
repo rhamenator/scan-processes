@@ -132,34 +132,75 @@ def init_database():
     conn.commit()
 
 def monitor_processes():
+    """Monitor all processes for high resource usage and network connections.
+    
+    Note: CPU measurements via process_iter use non-blocking mode and may not be 
+    accurate on first iteration. Subsequent iterations will have accurate measurements.
+    """
     process_count = 0
   
     for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent', 'io_counters']):
-        # Check for high resource usage
-        if proc.info['cpu_percent'] > high_cpu_threshold:
-            insert_event(proc, "High CPU", proc.info['cpu_percent'])
-            process_count +=1
-            investigate_process(proc, process_count)
+        try:
+            cpu_usage = proc.info['cpu_percent']
+            memory_usage = proc.info['memory_percent']
+            
+            # Track if this process should be investigated
+            should_investigate = False
+            
+            # Check for high resource usage
+            if cpu_usage is not None and cpu_usage > high_cpu_threshold:
+                insert_event(proc, "High CPU", cpu_usage)
+                process_count += 1
+                should_investigate = True
 
-        if proc.info['memory_percent'] > high_memory_threshold:
-            insert_event(proc, "High Memory", proc.info['memory_percent'])
-            process_count +=1
-            investigate_process(proc, process_count)
+            if memory_usage is not None and memory_usage > high_memory_threshold:
+                insert_event(proc, "High Memory", memory_usage)
+                process_count += 1
+                should_investigate = True
 
-        # Check io_counters (may be None on some platforms without proper permissions)
-        if proc.info['io_counters'] is not None:
-            write_mb = proc.info['io_counters'].write_bytes / 1024 / 1024
-            if write_mb > high_disk_threshold:  # Convert bytes to MB
-                insert_event(proc, "High Disk Write", write_mb)
-                process_count +=1
+            # Check io_counters (may be None on some platforms without proper permissions)
+            if proc.info['io_counters'] is not None:
+                write_bytes = proc.info['io_counters'].write_bytes
+                # Avoid division if write_bytes is 0 or very small
+                if write_bytes > 0:
+                    write_mb = write_bytes / 1024 / 1024
+                    if write_mb > high_disk_threshold:  # Convert bytes to MB
+                        insert_event(proc, "High Disk Write", write_mb)
+                        process_count += 1
+                        should_investigate = True
+            
+            # Only investigate once per process, even if multiple thresholds exceeded
+            if should_investigate:
                 investigate_process(proc, process_count)
+        
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            # Process may have terminated or we don't have access
+            continue
+        except Exception as e:
+            # Log unexpected errors but continue monitoring
+            print(f"\nError monitoring process: {e}", file=sys.stderr)
+            continue
 
 def investigate_process(proc, process_count):
     global connection_count
     try:
-        open_files = ", ".join([file.path for file in proc.open_files()]) if proc.open_files() else "None"
-        # Get network connections
-        connections = [conn for conn in psutil.net_connections() if conn.pid == proc.info['pid']]
+        # Get open files with proper error handling
+        try:
+            open_files_list = proc.open_files()
+            open_files = ", ".join([file.path for file in open_files_list]) if open_files_list else "None"
+        except (psutil.AccessDenied, psutil.NoSuchProcess):
+            open_files = "Access Denied"
+        
+        # Get network connections for this specific process
+        try:
+            # Use net_connections with kind parameter to get process-specific connections
+            # This replaces the deprecated proc.connections() method
+            pid = proc.info['pid']
+            connections = [c for c in psutil.net_connections(kind='inet') if c.pid == pid]
+        except (psutil.AccessDenied, psutil.NoSuchProcess):
+            # If we can't get connections for this process, skip it
+            return
+        
         for conn in connections:
             connection_count += 1
             try:
@@ -171,12 +212,16 @@ def investigate_process(proc, process_count):
                 ip_connection_type = get_connection_type(conn)
                 ip_connection_status = conn.status
                 
-                if len(remote_ip) > 0: 
+                if remote_ip and len(remote_ip) > 0: 
                     ip_address_type = get_ip_address_type(remote_ip)
+                    # Avoid blocking DNS lookups - set timeout and catch all exceptions
                     try:
+                        socket.setdefaulttimeout(1.0)  # 1 second timeout
                         remote_hostname = socket.gethostbyaddr(remote_ip)[0]
-                    except socket.herror:
+                    except (socket.herror, socket.gaierror, socket.timeout, OSError):
                         remote_hostname = 'Unresolved'
+                    finally:
+                        socket.setdefaulttimeout(None)  # Reset to default
                 else:
                     ip_address_type = ''
                     remote_hostname = ''
@@ -199,10 +244,19 @@ def investigate_process(proc, process_count):
                 print(f'Processes investigated: {process_count}, {connection_count} connections...', end='\r')                
             
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                pass
+                # Connection or process disappeared
+                continue
+            except Exception as e:
+                # Log unexpected errors but continue
+                print(f"\nError investigating connection: {e}", file=sys.stderr)
+                continue
             
     except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        # Process disappeared or access denied
         pass
+    except Exception as e:
+        # Catch any other unexpected errors
+        print(f"\nError investigating process: {e}", file=sys.stderr)
 
 def get_connection_type(conn):
     if conn.type == socket.SOCK_STREAM:
@@ -217,9 +271,13 @@ def get_address_info(addr):
     if addr is None:
         return '', ''
     
-    ip = addr.ip if hasattr(addr, 'ip') else (addr[0] if isinstance(addr, tuple) and len(addr) > 0 else '')
-    port = addr.port if hasattr(addr, 'port') else (addr[1] if isinstance(addr, tuple) and len(addr) > 1 else '')
-    return ip, port
+    try:
+        ip = addr.ip if hasattr(addr, 'ip') else (addr[0] if isinstance(addr, tuple) and len(addr) > 0 else '')
+        port = addr.port if hasattr(addr, 'port') else (addr[1] if isinstance(addr, tuple) and len(addr) > 1 else '')
+        return ip, port
+    except (IndexError, AttributeError, TypeError):
+        # Handle unexpected address formats gracefully
+        return '', ''
 
 def get_ip_address_type(ip_str):
     try:
@@ -238,26 +296,32 @@ def get_ip_address_type(ip_str):
         return "Invalid"
 
 def insert_event(proc, event_type, resource_usage, open_files=None, ip_connection_type=None, ip_connection_status=None, local_address=None, local_port=None, remote_address=None, remote_port=None, remote_hostname=None, ip_address_type=None, connection_family=None):
-    cursor.execute('''
-        INSERT INTO process_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (
-        time.strftime('%Y-%m-%d %H:%M:%S'),
-        proc.info['pid'],
-        proc.info['name'],
-        event_type,
-        resource_usage,
-        open_files,
-        ip_connection_type,
-        ip_connection_status,
-        local_address,
-        local_port,
-        remote_address, 
-        remote_port,
-        remote_hostname,
-        ip_address_type,
-        connection_family 
-    ))
-    conn.commit()
+    try:
+        cursor.execute('''
+            INSERT INTO process_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            time.strftime('%Y-%m-%d %H:%M:%S'),
+            proc.info['pid'],
+            proc.info['name'],
+            event_type,
+            resource_usage,
+            open_files,
+            ip_connection_type,
+            ip_connection_status,
+            local_address,
+            local_port,
+            remote_address, 
+            remote_port,
+            remote_hostname,
+            ip_address_type,
+            connection_family 
+        ))
+        # Note: We don't commit here for performance reasons.
+        # Commits are batched in the main loop to reduce I/O overhead.
+    except sqlite3.Error as e:
+        print(f"\nDatabase error: {e}", file=sys.stderr)
+    except Exception as e:
+        print(f"\nUnexpected error inserting event: {e}", file=sys.stderr)
 
 # Main execution
 if __name__ == "__main__":
@@ -266,18 +330,40 @@ if __name__ == "__main__":
         request_admin_privileges()
     
     # Initialize database after privilege check
-    init_database()
+    try:
+        init_database()
+    except Exception as e:
+        print(f"\nFailed to initialize database: {e}", file=sys.stderr)
+        sys.exit(1)
     
     try:
         print('Process Monitor started with elevated privileges.')
         print('Press ctrl+c to exit.')
+        iteration_count = 0
         while True:
             monitor_processes()
+            iteration_count += 1
+            
+            # Commit database changes periodically (every iteration) instead of per insert
+            # This significantly improves performance
+            try:
+                if conn:
+                    conn.commit()
+            except sqlite3.Error as e:
+                print(f"\nDatabase commit error: {e}", file=sys.stderr)
+            
             time.sleep(wait_time)
     except KeyboardInterrupt:
-        print('\nSQLite database "process_monitor.db" has been created.')
+        print('\n\nSQLite database "process_monitor.db" has been created.')
         print("Exiting ...")
+    except Exception as e:
+        print(f"\nUnexpected error in main loop: {e}", file=sys.stderr)
     finally:
-        # Close the database connection when the script ends
-        if conn:
-            conn.close()
+        # Ensure database is properly closed
+        try:
+            if conn:
+                conn.commit()  # Final commit of any pending data
+                conn.close()
+                print("Database connection closed successfully.")
+        except Exception as e:
+            print(f"Error closing database: {e}", file=sys.stderr)
