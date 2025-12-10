@@ -11,7 +11,6 @@ import argparse
 import json
 import logging
 import csv
-from datetime import datetime
 
 # Platform-specific imports
 if platform.system() == 'Windows':
@@ -38,12 +37,13 @@ DEFAULT_CONFIG = {
     'statistics_interval': 60  # Show stats every 60 seconds
 }
 
+
 def normalize_whitelist(items):
     """Normalize whitelist items to lowercase strings.
-    
+
     Args:
         items: List of whitelist entries (can be mixed types)
-        
+
     Returns:
         Set of normalized lowercase strings, excluding None and empty strings
     """
@@ -54,6 +54,7 @@ def normalize_whitelist(items):
             if item_str:  # Only add non-empty strings
                 normalized.add(item_str.lower())
     return normalized
+
 
 # Global configuration (will be loaded from file or defaults)
 wait_time = DEFAULT_CONFIG['wait_time']
@@ -87,19 +88,20 @@ stats = {
     'last_stats_display': None
 }
 
+
 def load_config(config_file):
     """Load configuration from JSON file."""
     global wait_time, high_cpu_threshold, high_memory_threshold
     global high_disk_write_rate_threshold, high_disk_read_rate_threshold
     global high_disk_cumulative_threshold, disk_io_whitelist
-    
+
     try:
-        with open(config_file, 'r') as f:
+        with open(config_file, 'r', encoding='utf-8') as f:
             user_config = json.load(f)
-        
+
         # Merge user config with defaults (user config takes precedence)
         config = {**DEFAULT_CONFIG, **user_config}
-        
+
         # Update global variables from merged config
         wait_time = config['wait_time']
         high_cpu_threshold = config['high_cpu_threshold']
@@ -107,7 +109,7 @@ def load_config(config_file):
         high_disk_write_rate_threshold = config['high_disk_write_rate_threshold']
         high_disk_read_rate_threshold = config['high_disk_read_rate_threshold']
         high_disk_cumulative_threshold = config['high_disk_cumulative_threshold']
-        
+
         # Handle whitelist with validation and lowercase normalization
         whitelist_value = config['disk_io_whitelist']
         if isinstance(whitelist_value, list):
@@ -115,26 +117,28 @@ def load_config(config_file):
         else:
             logging.warning("Config value for 'disk_io_whitelist' is not a list; using default whitelist.")
             disk_io_whitelist = normalize_whitelist(DEFAULT_CONFIG['disk_io_whitelist'])
-        
-        logging.info(f"Configuration loaded from {config_file}")
+
+        logging.info("Configuration loaded from %s", config_file)
         return config
     except FileNotFoundError:
-        logging.warning(f"Configuration file {config_file} not found, using defaults")
+        logging.warning("Configuration file %s not found, using defaults", config_file)
         return DEFAULT_CONFIG
     except json.JSONDecodeError as e:
-        logging.error(f"Error parsing configuration file: {e}")
+        logging.error("Error parsing configuration file: %s", e)
         return DEFAULT_CONFIG
+
 
 def save_default_config(config_file='config.json'):
     """Save default configuration to a JSON file."""
     try:
-        with open(config_file, 'w') as f:
+        with open(config_file, 'w', encoding='utf-8') as f:
             json.dump(DEFAULT_CONFIG, f, indent=4)
-        logging.info(f"Default configuration saved to {config_file}")
+        logging.info("Default configuration saved to %s", config_file)
         return True
     except Exception as e:
-        logging.error(f"Failed to save configuration: {e}")
+        logging.error("Failed to save configuration: %s", e)
         return False
+
 
 def parse_arguments():
     """Parse command-line arguments."""
@@ -142,7 +146,7 @@ def parse_arguments():
         description='Process Monitor - Monitor system processes for high resource usage',
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    
+
     parser.add_argument('--config', '-c', type=str, default='config.json',
                         help='Configuration file path (default: config.json)')
     parser.add_argument('--generate-config', action='store_true',
@@ -161,8 +165,9 @@ def parse_arguments():
                         help='Logging level (default: INFO)')
     parser.add_argument('--no-stats', action='store_true',
                         help='Disable periodic statistics display')
-    
+
     return parser.parse_args()
+
 
 def setup_logging(log_level='INFO'):
     """Configure logging system."""
@@ -173,20 +178,21 @@ def setup_logging(log_level='INFO'):
         datefmt='%Y-%m-%d %H:%M:%S'
     )
 
+
 def display_statistics():
     """Display monitoring statistics.
-    
+
     Note: Uses print() instead of logging to provide clean, user-facing
     formatted output without log timestamps/levels. Statistics can be
     disabled with --no-stats flag.
     """
     if stats['start_time'] is None:
         return
-    
+
     elapsed = time.time() - stats['start_time']
     hours, remainder = divmod(int(elapsed), 3600)
     minutes, seconds = divmod(remainder, 60)
-    
+
     print("\n" + "="*60)
     print("MONITORING STATISTICS")
     print("="*60)
@@ -198,27 +204,28 @@ def display_statistics():
     print(f"High Cumulative Disk events: {stats['high_cumulative_disk_events']}")
     print(f"Network connections tracked: {stats['network_connections']}")
     print("="*60 + "\n")
-    
+
     stats['last_stats_display'] = time.time()
+
 
 def export_to_csv(db_path, output_file):
     """Export database contents to CSV file."""
     try:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
-        
+
         cursor.execute("SELECT * FROM process_events")
         rows = cursor.fetchall()
-        
+
         # Get column names
         cursor.execute("PRAGMA table_info(process_events)")
         columns = [col[1] for col in cursor.fetchall()]
-        
-        with open(output_file, 'w', newline='') as f:
+
+        with open(output_file, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerow(columns)
             writer.writerows(rows)
-        
+
         conn.close()
         print(f"Exported {len(rows)} records to {output_file}")
         return True
@@ -226,25 +233,26 @@ def export_to_csv(db_path, output_file):
         print(f"Error exporting to CSV: {e}", file=sys.stderr)
         return False
 
+
 def export_to_json(db_path, output_file):
     """Export database contents to JSON file."""
     try:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
-        
+
         cursor.execute("SELECT * FROM process_events")
         rows = cursor.fetchall()
-        
+
         # Get column names
         cursor.execute("PRAGMA table_info(process_events)")
         columns = [col[1] for col in cursor.fetchall()]
-        
+
         # Convert to list of dictionaries
         records = [dict(zip(columns, row)) for row in rows]
-        
-        with open(output_file, 'w') as f:
+
+        with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(records, f, indent=2)
-        
+
         conn.close()
         print(f"Exported {len(records)} records to {output_file}")
         return True
@@ -252,21 +260,22 @@ def export_to_json(db_path, output_file):
         print(f"Error exporting to JSON: {e}", file=sys.stderr)
         return False
 
+
 def is_admin():
     """Check if the script is running with administrative/root privileges."""
     try:
         if platform.system() == 'Windows':
             return ctypes.windll.shell32.IsUserAnAdmin() != 0
-        else:
-            # On Unix-like systems, check if effective user ID is 0 (root)
-            return os.geteuid() == 0
+        # On Unix-like systems, check if effective user ID is 0 (root)
+        return os.geteuid() == 0
     except Exception:
         return False
+
 
 def request_admin_privileges():
     """Request admin privileges or display appropriate message based on platform."""
     current_platform = platform.system()
-    
+
     if current_platform == 'Windows':
         # On Windows, try to re-launch the script with elevated privileges
         try:
@@ -303,6 +312,7 @@ def request_admin_privileges():
         print("="*70)
         sys.exit(1)
 
+
 # Build families dictionary dynamically based on available socket families
 families = {
     socket.AF_INET: 'IPv4',
@@ -332,6 +342,7 @@ if hasattr(socket, 'AF_UNIX'):
 if hasattr(socket, 'AF_PACKET'):
     families[socket.AF_PACKET] = 'Packet'
 
+
 # Global database connection variables (initialized in main)
 # Note: Global state is used here for simplicity as the connection is shared
 # across multiple monitoring functions. This is acceptable for a single-threaded
@@ -339,13 +350,14 @@ if hasattr(socket, 'AF_PACKET'):
 conn = None
 cursor = None
 
+
 def init_database(db_path='process_monitor.db'):
     """Initialize the SQLite database connection and create tables."""
     global conn, cursor
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
-    logging.info(f"Database initialized: {db_path}")
-    
+    logging.info("Database initialized: %s", db_path)
+
     # Create the table if it doesn't exist
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS process_events (
@@ -368,37 +380,39 @@ def init_database(db_path='process_monitor.db'):
     ''')
     conn.commit()
 
+
 def check_io_rate(bytes_current, bytes_previous, threshold, wait_time):
     """Helper function to check if I/O rate exceeds threshold.
-    
+
     Args:
         bytes_current: Current byte count
         bytes_previous: Previous byte count
         threshold: Threshold in MB/s
         wait_time: Time interval in seconds
-        
+
     Returns:
         Tuple of (exceeds_threshold, rate_in_mb_per_sec), where rate_in_mb_per_sec is in MB/s.
     """
     bytes_delta = bytes_current - bytes_previous
-    
+
     # Handle counter resets (negative values) and check for valid wait_time
     if bytes_delta < 0 or wait_time <= 0:
         return False, 0.0
-    
+
     rate_mb_per_sec = (bytes_delta / 1024 / 1024) / wait_time
     return rate_mb_per_sec > threshold, rate_mb_per_sec
 
+
 def monitor_processes():
     """Monitor all processes for high resource usage and network connections.
-    
-    Note: CPU measurements via process_iter use non-blocking mode and may not be 
+
+    Note: CPU measurements via process_iter use non-blocking mode and may not be
     accurate on first iteration. Subsequent iterations will have accurate measurements.
     """
-    global prev_io_counters, cleanup_counter, cumulative_alerted_pids
+    global prev_io_counters, cleanup_counter, cumulative_alerted_pids  # noqa: F824
     process_count = 0
     current_pids = set()
-  
+
     for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent', 'io_counters']):
         try:
             cpu_usage = proc.info['cpu_percent']
@@ -406,10 +420,10 @@ def monitor_processes():
             pid = proc.info['pid']
             process_name = proc.info['name']
             current_pids.add(pid)
-            
+
             # Track if this process should be investigated
             should_investigate = False
-            
+
             # Check for high resource usage
             if cpu_usage is not None and cpu_usage > high_cpu_threshold:
                 insert_event(proc, "High CPU", cpu_usage)
@@ -425,20 +439,20 @@ def monitor_processes():
 
             # Check if process is whitelisted for disk I/O monitoring
             is_whitelisted = process_name.lower() in disk_io_whitelist
-            
+
             # Check io_counters (may be None on some platforms without proper permissions)
             if proc.info['io_counters'] is not None and not is_whitelisted:
                 io_counters = proc.info['io_counters']
                 write_bytes = io_counters.write_bytes
                 read_bytes = io_counters.read_bytes
-                
+
                 # Rate-based monitoring: Calculate write/read rates between iterations
                 if pid in prev_io_counters:
                     prev_write_bytes, prev_read_bytes = prev_io_counters[pid]
-                    
+
                     # Check write rate using helper function
                     exceeds_write, write_rate = check_io_rate(
-                        write_bytes, prev_write_bytes, 
+                        write_bytes, prev_write_bytes,
                         high_disk_write_rate_threshold, wait_time
                     )
                     if exceeds_write:
@@ -446,7 +460,7 @@ def monitor_processes():
                         stats['high_disk_write_rate_events'] += 1
                         process_count += 1
                         should_investigate = True
-                    
+
                     # Check read rate using helper function
                     exceeds_read, read_rate = check_io_rate(
                         read_bytes, prev_read_bytes,
@@ -457,7 +471,7 @@ def monitor_processes():
                         stats['high_disk_read_rate_events'] += 1
                         process_count += 1
                         should_investigate = True
-                
+
                 # Cumulative monitoring: Check total writes since process start
                 # Only alert once per process to avoid duplicate notifications
                 if write_bytes > 0 and pid not in cumulative_alerted_pids:
@@ -468,14 +482,14 @@ def monitor_processes():
                         cumulative_alerted_pids.add(pid)  # Mark as alerted
                         process_count += 1
                         should_investigate = True
-                
+
                 # Store current counters for next iteration
                 prev_io_counters[pid] = (write_bytes, read_bytes)
-            
+
             # Only investigate once per process, even if multiple thresholds exceeded
             if should_investigate:
                 investigate_process(proc, process_count)
-        
+
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             # Process may have terminated or we don't have access
             continue
@@ -483,7 +497,7 @@ def monitor_processes():
             # Log unexpected errors but continue monitoring
             print(f"\nError monitoring process: {e}", file=sys.stderr)
             continue
-    
+
     # Clean up terminated processes periodically to prevent memory leak
     # Only run cleanup every 10 iterations to reduce overhead
     cleanup_counter += 1
@@ -494,6 +508,7 @@ def monitor_processes():
             cumulative_alerted_pids.discard(pid)  # Also clean up alert tracking
         cleanup_counter = 0
 
+
 def investigate_process(proc, process_count):
     global connection_count
     try:
@@ -503,7 +518,7 @@ def investigate_process(proc, process_count):
             open_files = ", ".join([file.path for file in open_files_list]) if open_files_list else "None"
         except (psutil.AccessDenied, psutil.NoSuchProcess):
             open_files = "Access Denied"
-        
+
         # Get network connections for this specific process
         try:
             # Use net_connections with kind parameter to get process-specific connections
@@ -513,7 +528,7 @@ def investigate_process(proc, process_count):
         except (psutil.AccessDenied, psutil.NoSuchProcess):
             # If we can't get connections for this process, skip it
             return
-        
+
         for conn in connections:
             connection_count += 1
             stats['network_connections'] += 1
@@ -521,12 +536,12 @@ def investigate_process(proc, process_count):
                 # Extract address information using helper function
                 remote_ip, remote_port = get_address_info(conn.raddr)
                 local_ip, local_port = get_address_info(conn.laddr)
-                
+
                 connection_family = families.get(conn.family, 'Other')
                 ip_connection_type = get_connection_type(conn)
                 ip_connection_status = conn.status
-                
-                if remote_ip and len(remote_ip) > 0: 
+
+                if remote_ip and len(remote_ip) > 0:
                     ip_address_type = get_ip_address_type(remote_ip)
                     # Avoid blocking DNS lookups - set timeout and catch all exceptions
                     try:
@@ -539,7 +554,7 @@ def investigate_process(proc, process_count):
                 else:
                     ip_address_type = ''
                     remote_hostname = ''
-                
+
                 insert_event(
                     proc,
                     "Network Connection",
@@ -555,8 +570,8 @@ def investigate_process(proc, process_count):
                     ip_address_type,
                     connection_family
                 )
-                print(f'Processes investigated: {process_count}, {connection_count} connections...', end='\r')                
-            
+                print(f'Processes investigated: {process_count}, {connection_count} connections...', end='\r')
+
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 # Connection or process disappeared
                 continue
@@ -564,13 +579,14 @@ def investigate_process(proc, process_count):
                 # Log unexpected errors but continue
                 print(f"\nError investigating connection: {e}", file=sys.stderr)
                 continue
-            
+
     except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
         # Process disappeared or access denied
         pass
     except Exception as e:
         # Catch any other unexpected errors
         print(f"\nError investigating process: {e}", file=sys.stderr)
+
 
 def get_connection_type(conn):
     if conn.type == socket.SOCK_STREAM:
@@ -580,11 +596,12 @@ def get_connection_type(conn):
     else:
         return "Unknown"
 
+
 def get_address_info(addr):
     """Extract IP and port from address object (may be None, namedtuple, or tuple)."""
     if addr is None:
         return '', ''
-    
+
     try:
         ip = addr.ip if hasattr(addr, 'ip') else (addr[0] if isinstance(addr, tuple) and len(addr) > 0 else '')
         port = addr.port if hasattr(addr, 'port') else (addr[1] if isinstance(addr, tuple) and len(addr) > 1 else '')
@@ -592,6 +609,7 @@ def get_address_info(addr):
     except (IndexError, AttributeError, TypeError):
         # Handle unexpected address formats gracefully
         return '', ''
+
 
 def get_ip_address_type(ip_str):
     try:
@@ -605,11 +623,16 @@ def get_ip_address_type(ip_str):
         elif ip.is_unspecified:
             return "Unspecified"
         else:
-            return "Public" 
+            return "Public"
     except ValueError:
         return "Invalid"
 
-def insert_event(proc, event_type, resource_usage, open_files=None, ip_connection_type=None, ip_connection_status=None, local_address=None, local_port=None, remote_address=None, remote_port=None, remote_hostname=None, ip_address_type=None, connection_family=None):
+
+def insert_event(proc, event_type, resource_usage, open_files=None,
+                 ip_connection_type=None, ip_connection_status=None,
+                 local_address=None, local_port=None, remote_address=None,
+                 remote_port=None, remote_hostname=None, ip_address_type=None,
+                 connection_family=None):
     try:
         cursor.execute('''
             INSERT INTO process_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -624,11 +647,11 @@ def insert_event(proc, event_type, resource_usage, open_files=None, ip_connectio
             ip_connection_status,
             local_address,
             local_port,
-            remote_address, 
+            remote_address,
             remote_port,
             remote_hostname,
             ip_address_type,
-            connection_family 
+            connection_family
         ))
         # Note: We don't commit here for performance reasons.
         # Commits are batched in the main loop to reduce I/O overhead.
@@ -637,17 +660,18 @@ def insert_event(proc, event_type, resource_usage, open_files=None, ip_connectio
     except Exception as e:
         print(f"\nUnexpected error inserting event: {e}", file=sys.stderr)
 
+
 def main():
     """Main entry point for the process monitor."""
     global wait_time, high_cpu_threshold, high_memory_threshold
-    
+
     # Parse command-line arguments
     args = parse_arguments()
-    
+
     # Setup logging
     log_level = args.log_level or DEFAULT_CONFIG.get('log_level', 'INFO')
     setup_logging(log_level)
-    
+
     # Handle generate-config option
     if args.generate_config:
         if save_default_config(args.config):
@@ -655,90 +679,95 @@ def main():
             sys.exit(0)
         else:
             sys.exit(1)
-    
+
     # Handle export option
     if args.export:
         if not os.path.exists(args.db):
             print(f"Database file '{args.db}' not found", file=sys.stderr)
             sys.exit(1)
-        
+
         if args.export.endswith('.csv'):
             success = export_to_csv(args.db, args.export)
         elif args.export.endswith('.json'):
             success = export_to_json(args.db, args.export)
         else:
-            print("Export file must have .csv or .json extension (e.g., results.csv or results.json)", file=sys.stderr)
+            print("Export file must have .csv or .json extension (e.g., results.csv or results.json)",
+                  file=sys.stderr)
             success = False
-        
+
         sys.exit(0 if success else 1)
-    
+
     # Check for administrative/root privileges
     if not is_admin():
         request_admin_privileges()
-    
+
     # Load configuration (load_config handles missing files)
     config = load_config(args.config)
-    
+
     # Override config with command-line arguments if provided
     if args.wait_time:
         wait_time = args.wait_time
-        logging.info(f"Wait time overridden to {wait_time} seconds")
-    
+        logging.info("Wait time overridden to %d seconds", wait_time)
+
     if args.cpu_threshold:
         high_cpu_threshold = args.cpu_threshold
-        logging.info(f"CPU threshold overridden to {high_cpu_threshold}%")
-    
+        logging.info("CPU threshold overridden to %d%%", high_cpu_threshold)
+
     if args.memory_threshold:
         high_memory_threshold = args.memory_threshold
-        logging.info(f"Memory threshold overridden to {high_memory_threshold}%")
-    
+        logging.info("Memory threshold overridden to %d%%", high_memory_threshold)
+
     show_stats = config.get('show_statistics', True) and not args.no_stats
     stats_interval = config.get('statistics_interval', 60)
-    
+
     # Initialize database after privilege check
     try:
         init_database(args.db)
     except Exception as e:
-        logging.error(f"Failed to initialize database: {e}")
+        logging.error("Failed to initialize database: %s", e)
         sys.exit(1)
-    
+
     try:
         logging.info('Process Monitor started with elevated privileges.')
-        logging.info(f'Database: {args.db}')
-        logging.info(f'Configuration: CPU={high_cpu_threshold}%, Memory={high_memory_threshold}%, '
-                    f'Disk Write Rate={high_disk_write_rate_threshold} MB/s, '
-                    f'Disk Read Rate={high_disk_read_rate_threshold} MB/s, '
-                    f'Cumulative Disk={high_disk_cumulative_threshold} MB')
+        logging.info('Database: %s', args.db)
+        logging.info('Configuration: CPU=%d%%, Memory=%d%%, '
+                     'Disk Write Rate=%d MB/s, '
+                     'Disk Read Rate=%d MB/s, '
+                     'Cumulative Disk=%d MB',
+                     high_cpu_threshold, high_memory_threshold,
+                     high_disk_write_rate_threshold,
+                     high_disk_read_rate_threshold,
+                     high_disk_cumulative_threshold)
         logging.info('Press Ctrl+C to exit.')
-        
+
         stats['start_time'] = time.time()
         stats['last_stats_display'] = time.time()
         iteration_count = 0
-        
+
         while True:
             monitor_processes()
             iteration_count += 1
-            
+
             # Commit database changes periodically (every iteration) instead of per insert
             # This significantly improves performance
             try:
                 if conn:
                     conn.commit()
             except sqlite3.Error as e:
-                logging.error(f"Database commit error: {e}")
-            
+                logging.error("Database commit error: %s", e)
+
             # Display statistics periodically
             if show_stats and (time.time() - stats['last_stats_display']) >= stats_interval:
                 display_statistics()
-            
+
             time.sleep(wait_time)
-            
+
     except KeyboardInterrupt:
         logging.info('\nMonitoring stopped by user.')
         if show_stats:
             display_statistics()
     except Exception as e:
-        logging.error(f"Unexpected error in main loop: {e}")
+        logging.error("Unexpected error in main loop: %s", e)
     finally:
         # Ensure database is properly closed
         try:
@@ -747,7 +776,8 @@ def main():
                 conn.close()
                 logging.info("Database connection closed successfully.")
         except Exception as e:
-            logging.error(f"Error closing database: {e}")
+            logging.error("Error closing database: %s", e)
+
 
 # Main execution
 if __name__ == "__main__":
