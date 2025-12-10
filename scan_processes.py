@@ -98,11 +98,14 @@ def investigate_process(proc, process_count):
         for conn in connections:
             connection_count += 1
             try:
-                remote_ip = conn.raddr.ip if hasattr(conn.raddr, 'ip') else (conn.raddr[0] if isinstance(conn.raddr, tuple) and len(conn.raddr) > 0 else '')
-                remote_port = conn.raddr.port if hasattr(conn.raddr, 'port') else (conn.raddr[1] if isinstance(conn.raddr, tuple) and len(conn.raddr) > 1 else '')
+                # Extract address information using helper function
+                remote_ip, remote_port = get_address_info(conn.raddr)
+                local_ip, local_port = get_address_info(conn.laddr)
+                
                 connection_family = families.get(conn.family, 'Other')
                 ip_connection_type = get_connection_type(conn)
                 ip_connection_status = conn.status
+                
                 if len(remote_ip) > 0: 
                     ip_address_type = get_ip_address_type(remote_ip)
                     try:
@@ -112,10 +115,6 @@ def investigate_process(proc, process_count):
                 else:
                     ip_address_type = ''
                     remote_hostname = ''
-                    
-                # Handle laddr which may be None or a tuple
-                local_ip = conn.laddr.ip if hasattr(conn.laddr, 'ip') else (conn.laddr[0] if conn.laddr and isinstance(conn.laddr, tuple) and len(conn.laddr) > 0 else '')
-                local_port = conn.laddr.port if hasattr(conn.laddr, 'port') else (conn.laddr[1] if conn.laddr and isinstance(conn.laddr, tuple) and len(conn.laddr) > 1 else '')
                 
                 insert_event(
                     proc,
@@ -147,6 +146,15 @@ def get_connection_type(conn):
         return "UDP"
     else:
         return "Unknown"
+
+def get_address_info(addr):
+    """Extract IP and port from address object (may be None, namedtuple, or tuple)."""
+    if addr is None:
+        return '', ''
+    
+    ip = addr.ip if hasattr(addr, 'ip') else (addr[0] if isinstance(addr, tuple) and len(addr) > 0 else '')
+    port = addr.port if hasattr(addr, 'port') else (addr[1] if isinstance(addr, tuple) and len(addr) > 1 else '')
+    return ip, port
 
 def get_ip_address_type(ip_str):
     try:
