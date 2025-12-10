@@ -164,10 +164,10 @@ def monitor_processes():
             # Check io_counters (may be None on some platforms without proper permissions)
             if proc.info['io_counters'] is not None:
                 write_bytes = proc.info['io_counters'].write_bytes
-                # Avoid division if write_bytes is 0 or very small
+                # Check if cumulative writes exceed threshold
                 if write_bytes > 0:
                     write_mb = write_bytes / 1024 / 1024
-                    if write_mb > high_disk_threshold:  # Convert bytes to MB
+                    if write_mb > high_disk_threshold:
                         insert_event(proc, "High Disk Write", write_mb)
                         process_count += 1
                         should_investigate = True
