@@ -45,19 +45,30 @@ Without elevated privileges, some features (like disk I/O monitoring and network
 
 ## Usage
 
-1. Run the script with elevated privileges:
+1. Run the script:
 
-    **Windows (PowerShell as Administrator):**
+    **Windows:**
+    
+    Simply run the script normally. If administrative privileges are required, the script will automatically request elevation:
     ```powershell
     python scan_processes.py
     ```
+    
+    If automatic elevation fails, you can manually run PowerShell as Administrator and execute the script.
 
     **Linux/macOS:**
+    
+    The script will check for root privileges and display a clear message if they're needed:
+    ```bash
+    python3 scan_processes.py
+    ```
+    
+    If you don't have root privileges, the script will display instructions to run with sudo:
     ```bash
     sudo python3 scan_processes.py
     ```
 
-2. Monitor output: The script will display a summary of investigated processes and connections to the console in real-time. Press `Ctrl+C` to stop monitoring.
+2. Monitor output: Once running with elevated privileges, the script will display a confirmation message and show a summary of investigated processes and connections in real-time. Press `Ctrl+C` to stop monitoring.
 
 3. Access the database: Events are stored in an SQLite database called `process_monitor.db` in the same directory as the script. You can use tools like:
     - [DB Browser for SQLite](https://sqlitebrowser.org/) (cross-platform GUI)
@@ -95,25 +106,30 @@ You can modify the following parameters at the top of `scan_processes.py`:
 
 ## Important Notes
 
-- **Elevated Privileges Required:** The script requires administrative/root privileges to access detailed process information and network connections.
-  - Without elevated privileges, disk I/O monitoring may not work on Linux/macOS
-  - Network connection monitoring requires elevated privileges on all platforms
+- **Elevated Privileges:** The script automatically checks for and requests administrative/root privileges:
+  - **Windows:** Attempts to automatically request elevation; if that fails, displays instructions
+  - **Linux/macOS:** Displays clear instructions to run with `sudo` if privileges are insufficient
+  - Required for: disk I/O monitoring, network connections, and detailed process information
 - **Database Location:** The SQLite database (`process_monitor.db`) is created in the current working directory
 - **Continuous Monitoring:** The script runs continuously until interrupted with `Ctrl+C`
 - **Performance Impact:** Monitoring can consume system resources; adjust `wait_time` if needed
 
 ## Troubleshooting
 
-### "Access Denied" Errors
-- **Solution:** Run the script with elevated privileges (Administrator on Windows, sudo on Linux/macOS)
+### Privilege Check Failed
+- **Windows:** If automatic elevation doesn't work, manually run PowerShell or Command Prompt as Administrator
+- **Linux/macOS:** Run the script with `sudo` as instructed by the error message
+
+### "Access Denied" Errors During Monitoring
+- **Solution:** Ensure the script is running with elevated privileges (the script checks this at startup)
 
 ### No Disk I/O Data on Linux/macOS
 - **Cause:** Requires root privileges
-- **Solution:** Run with `sudo python3 scan_processes.py`
+- **Solution:** The script will prompt you to use `sudo` if not running as root
 
 ### Empty Network Connection Data
 - **Cause:** Insufficient privileges or no active connections
-- **Solution:** Ensure elevated privileges and that monitored processes have network activity
+- **Solution:** Ensure elevated privileges (checked automatically) and that monitored processes have network activity
 
 ## Disclaimer
 

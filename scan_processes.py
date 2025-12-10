@@ -3,6 +3,9 @@ import time
 import socket
 import ipaddress
 import sqlite3
+import os
+import sys
+import platform
 
 wait_time = 10
 # Parameters for detection
@@ -10,6 +13,56 @@ high_cpu_threshold = 80  # Percentage
 high_memory_threshold = 70  # Percentage
 high_disk_threshold = 50  # MB/s
 connection_count = 0
+
+def is_admin():
+    """Check if the script is running with administrative/root privileges."""
+    try:
+        if platform.system() == 'Windows':
+            import ctypes
+            return ctypes.windll.shell32.IsUserAnAdmin() != 0
+        else:
+            # On Unix-like systems, check if effective user ID is 0 (root)
+            return os.geteuid() == 0
+    except Exception:
+        return False
+
+def request_admin_privileges():
+    """Request admin privileges or display appropriate message based on platform."""
+    current_platform = platform.system()
+    
+    if current_platform == 'Windows':
+        # On Windows, try to re-launch the script with elevated privileges
+        try:
+            import ctypes
+            if ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(sys.argv), None, 1) > 32:
+                sys.exit(0)
+            else:
+                print("\n" + "="*70)
+                print("ERROR: Administrator privileges are required!")
+                print("="*70)
+                print("\nThis script needs to run with administrator privileges to access")
+                print("detailed process information and network connections.")
+                print("\nPlease right-click on the script and select 'Run as administrator'")
+                print("or run it from an elevated command prompt/PowerShell.")
+                print("="*70)
+                sys.exit(1)
+        except Exception as e:
+            print(f"\nFailed to elevate privileges: {e}")
+            print("\nPlease run this script as Administrator.")
+            sys.exit(1)
+    else:
+        # On Linux/macOS, display instructions to run with sudo
+        print("\n" + "="*70)
+        print("ERROR: Root/sudo privileges are required!")
+        print("="*70)
+        print("\nThis script needs to run with elevated privileges to access:")
+        print("  - Disk I/O statistics (io_counters)")
+        print("  - Network connections for all processes")
+        print("  - Detailed process information")
+        print("\nPlease run the script with sudo:")
+        print(f"  sudo {sys.executable} {' '.join(sys.argv)}")
+        print("="*70)
+        sys.exit(1)
 
 # Build families dictionary dynamically based on available socket families
 families = {
@@ -40,31 +93,37 @@ if hasattr(socket, 'AF_UNIX'):
 if hasattr(socket, 'AF_PACKET'):
     families[socket.AF_PACKET] = 'Packet'
 
-# Create or connect to the SQLite database
-conn = sqlite3.connect('process_monitor.db')
-cursor = conn.cursor()
+# Global database connection variables (initialized in main)
+conn = None
+cursor = None
 
-# Create the table if it doesn't exist
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS process_events (
-        timestamp TEXT,
-        pid INTEGER,
-        process_name TEXT,
-        event_type TEXT,
-        resource_usage REAL,
-        open_files TEXT,
-        ip_connection_type TEXT,
-        ip_connection_status TEXT,
-        local_address TEXT,
-        local_port TEXT,
-        remote_address TEXT,
-        remote_port TEXT,
-        remote_hostname TEXT,
-        ip_address_type TEXT,
-        connection_family TEXT
-    )
-''')
-conn.commit()
+def init_database():
+    """Initialize the SQLite database connection and create tables."""
+    global conn, cursor
+    conn = sqlite3.connect('process_monitor.db')
+    cursor = conn.cursor()
+    
+    # Create the table if it doesn't exist
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS process_events (
+            timestamp TEXT,
+            pid INTEGER,
+            process_name TEXT,
+            event_type TEXT,
+            resource_usage REAL,
+            open_files TEXT,
+            ip_connection_type TEXT,
+            ip_connection_status TEXT,
+            local_address TEXT,
+            local_port TEXT,
+            remote_address TEXT,
+            remote_port TEXT,
+            remote_hostname TEXT,
+            ip_address_type TEXT,
+            connection_family TEXT
+        )
+    ''')
+    conn.commit()
 
 def monitor_processes():
     process_count = 0
@@ -195,14 +254,24 @@ def insert_event(proc, event_type, resource_usage, open_files=None, ip_connectio
     conn.commit()
 
 # Main execution
-try:
-    print('Press ctrl+c to exit.')
-    while True:
-        monitor_processes()
-        time.sleep(wait_time)
-except KeyboardInterrupt:
-    print('\nSQLite database "process_monitor.db" has been created.')
-    print("Exiting ...")
-finally:
-    # Close the database connection when the script ends
-    conn.close()
+if __name__ == "__main__":
+    # Check for administrative/root privileges
+    if not is_admin():
+        request_admin_privileges()
+    
+    # Initialize database after privilege check
+    init_database()
+    
+    try:
+        print('Process Monitor started with elevated privileges.')
+        print('Press ctrl+c to exit.')
+        while True:
+            monitor_processes()
+            time.sleep(wait_time)
+    except KeyboardInterrupt:
+        print('\nSQLite database "process_monitor.db" has been created.')
+        print("Exiting ...")
+    finally:
+        # Close the database connection when the script ends
+        if conn:
+            conn.close()
