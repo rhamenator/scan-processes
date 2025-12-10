@@ -16,8 +16,24 @@ wait_time = 10
 # Parameters for detection
 high_cpu_threshold = 80  # Percentage
 high_memory_threshold = 70  # Percentage
-high_disk_threshold = 50  # MB (cumulative writes)
+high_disk_write_rate_threshold = 50  # MB/s (rate of writes)
+high_disk_read_rate_threshold = 100  # MB/s (rate of reads)
+high_disk_cumulative_threshold = 500  # MB (cumulative writes)
 connection_count = 0
+
+# Process whitelist - processes that won't trigger disk I/O alerts
+# Add process names (case-insensitive) that are known to do heavy I/O
+disk_io_whitelist = {
+    'onedrive.exe', 'onedrive',
+    'googledrivesync.exe', 'googledrivesync',
+    'dropbox.exe', 'dropbox',
+    'backup', 'backupd',
+    'chrome.exe', 'firefox.exe', 'msedge.exe',
+    'chrome', 'firefox', 'msedge',
+}
+
+# Track previous I/O counters for rate calculation
+prev_io_counters = {}
 
 def is_admin():
     """Check if the script is running with administrative/root privileges."""
@@ -140,12 +156,17 @@ def monitor_processes():
     Note: CPU measurements via process_iter use non-blocking mode and may not be 
     accurate on first iteration. Subsequent iterations will have accurate measurements.
     """
+    global prev_io_counters
     process_count = 0
+    current_pids = set()
   
     for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent', 'io_counters']):
         try:
             cpu_usage = proc.info['cpu_percent']
             memory_usage = proc.info['memory_percent']
+            pid = proc.info['pid']
+            process_name = proc.info['name']
+            current_pids.add(pid)
             
             # Track if this process should be investigated
             should_investigate = False
@@ -161,16 +182,46 @@ def monitor_processes():
                 process_count += 1
                 should_investigate = True
 
+            # Check if process is whitelisted for disk I/O monitoring
+            is_whitelisted = process_name.lower() in disk_io_whitelist
+            
             # Check io_counters (may be None on some platforms without proper permissions)
-            if proc.info['io_counters'] is not None:
-                write_bytes = proc.info['io_counters'].write_bytes
-                # Check if cumulative writes exceed threshold
+            if proc.info['io_counters'] is not None and not is_whitelisted:
+                io_counters = proc.info['io_counters']
+                write_bytes = io_counters.write_bytes
+                read_bytes = io_counters.read_bytes
+                
+                # Rate-based monitoring: Calculate write/read rates between iterations
+                if pid in prev_io_counters:
+                    prev_write_bytes, prev_read_bytes = prev_io_counters[pid]
+                    bytes_written = write_bytes - prev_write_bytes
+                    bytes_read = read_bytes - prev_read_bytes
+                    
+                    # Handle counter resets (negative values) and check for valid wait_time
+                    if bytes_written >= 0 and wait_time > 0:
+                        write_mb_per_sec = (bytes_written / 1024 / 1024) / wait_time
+                        if write_mb_per_sec > high_disk_write_rate_threshold:
+                            insert_event(proc, "High Disk Write Rate", write_mb_per_sec)
+                            process_count += 1
+                            should_investigate = True
+                    
+                    if bytes_read >= 0 and wait_time > 0:
+                        read_mb_per_sec = (bytes_read / 1024 / 1024) / wait_time
+                        if read_mb_per_sec > high_disk_read_rate_threshold:
+                            insert_event(proc, "High Disk Read Rate", read_mb_per_sec)
+                            process_count += 1
+                            should_investigate = True
+                
+                # Cumulative monitoring: Check total writes since process start
                 if write_bytes > 0:
-                    write_mb = write_bytes / 1024 / 1024
-                    if write_mb > high_disk_threshold:
-                        insert_event(proc, "High Disk Write", write_mb)
+                    write_mb_cumulative = write_bytes / 1024 / 1024
+                    if write_mb_cumulative > high_disk_cumulative_threshold:
+                        insert_event(proc, "High Cumulative Disk Writes", write_mb_cumulative)
                         process_count += 1
                         should_investigate = True
+                
+                # Store current counters for next iteration
+                prev_io_counters[pid] = (write_bytes, read_bytes)
             
             # Only investigate once per process, even if multiple thresholds exceeded
             if should_investigate:
@@ -183,6 +234,11 @@ def monitor_processes():
             # Log unexpected errors but continue monitoring
             print(f"\nError monitoring process: {e}", file=sys.stderr)
             continue
+    
+    # Clean up terminated processes from prev_io_counters to prevent memory leak
+    terminated_pids = set(prev_io_counters.keys()) - current_pids
+    for pid in terminated_pids:
+        del prev_io_counters[pid]
 
 def investigate_process(proc, process_count):
     global connection_count

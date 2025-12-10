@@ -17,7 +17,7 @@ Without elevated privileges, some features (like disk I/O monitoring and network
 
 ## Features
 
-- **Resource Monitoring:** Tracks CPU usage, memory consumption, and disk write activity of processes.
+- **Resource Monitoring:** Tracks CPU usage, memory consumption, and disk I/O (read/write rates and cumulative writes) of processes.
 - **Network Connection Tracking:** Logs details about network connections established by processes, including remote IP addresses and ports.
 - **SQLite Database:** Stores events in a local SQLite database for easy querying and analysis.
 - **Real-time Monitoring:** Continuously monitors processes and reports events as they occur.
@@ -102,7 +102,31 @@ You can modify the following parameters at the top of `scan_processes.py`:
 - `wait_time`: Interval in seconds between process scans (default: 10 seconds)
 - `high_cpu_threshold`: CPU usage percentage to trigger an alert (default: 80%)
 - `high_memory_threshold`: Memory usage percentage to trigger an alert (default: 70%)
-- `high_disk_threshold`: Cumulative disk writes in MB to trigger an alert (default: 50 MB)
+- `high_disk_write_rate_threshold`: Disk write speed in MB/s to trigger an alert (default: 50 MB/s)
+- `high_disk_read_rate_threshold`: Disk read speed in MB/s to trigger an alert (default: 100 MB/s)
+- `high_disk_cumulative_threshold`: Cumulative disk writes in MB to trigger an alert (default: 500 MB)
+- `disk_io_whitelist`: Set of process names to exclude from disk I/O monitoring (e.g., OneDrive, Google Drive)
+
+### Disk I/O Whitelist
+
+The `disk_io_whitelist` set allows you to exclude known legitimate processes from disk I/O alerts. This is useful for processes like:
+- Cloud storage sync clients (OneDrive, Google Drive, Dropbox)
+- Web browsers performing downloads
+- Backup software
+- Other applications with expected heavy disk activity
+
+To add a process to the whitelist, edit the `disk_io_whitelist` set in `scan_processes.py`:
+
+```python
+disk_io_whitelist = {
+    'onedrive.exe', 'onedrive',
+    'googledrivesync.exe', 'googledrivesync',
+    'dropbox.exe', 'dropbox',
+    'mybackup.exe',  # Add your custom processes here
+}
+```
+
+Process names are case-insensitive and should match the process name as shown by the system.
 
 ## Important Notes
 
@@ -114,8 +138,11 @@ You can modify the following parameters at the top of `scan_processes.py`:
 - **Continuous Monitoring:** The script runs continuously until interrupted with `Ctrl+C`
 - **Monitoring Behavior:** 
   - CPU and memory usage are measured at each scan interval
-  - Disk monitoring tracks cumulative bytes written by a process since it started
-  - Processes that have written more than the threshold (in total) will trigger an alert
+  - Disk monitoring uses both rate-based and cumulative tracking:
+    - **Rate-based**: Detects processes suddenly consuming high disk I/O (MB/s for reads and writes)
+    - **Cumulative**: Detects processes with excessive total disk writes since they started
+  - Disk rate alerts (MB/s) appear starting from the second monitoring cycle
+  - Whitelisted processes (OneDrive, Google Drive, browsers, etc.) are excluded from disk I/O alerts
 - **Performance Impact:** Monitoring can consume system resources; adjust `wait_time` if needed
 
 ## Troubleshooting
