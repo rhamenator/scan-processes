@@ -7,30 +7,45 @@ import os
 import sys
 import platform
 import subprocess
+import argparse
+import json
+import logging
+from datetime import datetime
 
 # Platform-specific imports
 if platform.system() == 'Windows':
     import ctypes
 
-wait_time = 10
-# Parameters for detection
-high_cpu_threshold = 80  # Percentage
-high_memory_threshold = 70  # Percentage
-high_disk_write_rate_threshold = 50  # MB/s (rate of writes)
-high_disk_read_rate_threshold = 100  # MB/s (rate of reads)
-high_disk_cumulative_threshold = 500  # MB (cumulative writes)
-connection_count = 0
-
-# Process whitelist - processes that won't trigger disk I/O alerts
-# Add process names (case-insensitive) that are known to do heavy I/O
-disk_io_whitelist = {
-    'onedrive.exe', 'onedrive',
-    'googledrivesync.exe', 'googledrivesync',
-    'dropbox.exe', 'dropbox',
-    'backup', 'backupd',
-    'chrome.exe', 'firefox.exe', 'msedge.exe',
-    'chrome', 'firefox', 'msedge',
+# Default configuration
+DEFAULT_CONFIG = {
+    'wait_time': 10,
+    'high_cpu_threshold': 80,
+    'high_memory_threshold': 70,
+    'high_disk_write_rate_threshold': 50,
+    'high_disk_read_rate_threshold': 100,
+    'high_disk_cumulative_threshold': 500,
+    'disk_io_whitelist': [
+        'onedrive.exe', 'onedrive',
+        'googledrivesync.exe', 'googledrivesync',
+        'dropbox.exe', 'dropbox',
+        'backup', 'backupd',
+        'chrome.exe', 'firefox.exe', 'msedge.exe',
+        'chrome', 'firefox', 'msedge',
+    ],
+    'log_level': 'INFO',
+    'show_statistics': True,
+    'statistics_interval': 60  # Show stats every 60 seconds
 }
+
+# Global configuration (will be loaded from file or defaults)
+wait_time = DEFAULT_CONFIG['wait_time']
+high_cpu_threshold = DEFAULT_CONFIG['high_cpu_threshold']
+high_memory_threshold = DEFAULT_CONFIG['high_memory_threshold']
+high_disk_write_rate_threshold = DEFAULT_CONFIG['high_disk_write_rate_threshold']
+high_disk_read_rate_threshold = DEFAULT_CONFIG['high_disk_read_rate_threshold']
+high_disk_cumulative_threshold = DEFAULT_CONFIG['high_disk_cumulative_threshold']
+disk_io_whitelist = set(DEFAULT_CONFIG['disk_io_whitelist'])
+connection_count = 0
 
 # Track previous I/O counters for rate calculation
 prev_io_counters = {}
@@ -40,6 +55,170 @@ cumulative_alerted_pids = set()
 
 # Cleanup counter to avoid running cleanup on every iteration
 cleanup_counter = 0
+
+# Statistics tracking
+stats = {
+    'high_cpu_events': 0,
+    'high_memory_events': 0,
+    'high_disk_write_rate_events': 0,
+    'high_disk_read_rate_events': 0,
+    'high_cumulative_disk_events': 0,
+    'network_connections': 0,
+    'start_time': None,
+    'last_stats_display': None
+}
+
+def load_config(config_file):
+    """Load configuration from JSON file."""
+    global wait_time, high_cpu_threshold, high_memory_threshold
+    global high_disk_write_rate_threshold, high_disk_read_rate_threshold
+    global high_disk_cumulative_threshold, disk_io_whitelist
+    
+    try:
+        with open(config_file, 'r') as f:
+            config = json.load(f)
+        
+        # Update global variables from config
+        wait_time = config.get('wait_time', DEFAULT_CONFIG['wait_time'])
+        high_cpu_threshold = config.get('high_cpu_threshold', DEFAULT_CONFIG['high_cpu_threshold'])
+        high_memory_threshold = config.get('high_memory_threshold', DEFAULT_CONFIG['high_memory_threshold'])
+        high_disk_write_rate_threshold = config.get('high_disk_write_rate_threshold', DEFAULT_CONFIG['high_disk_write_rate_threshold'])
+        high_disk_read_rate_threshold = config.get('high_disk_read_rate_threshold', DEFAULT_CONFIG['high_disk_read_rate_threshold'])
+        high_disk_cumulative_threshold = config.get('high_disk_cumulative_threshold', DEFAULT_CONFIG['high_disk_cumulative_threshold'])
+        disk_io_whitelist = set(config.get('disk_io_whitelist', DEFAULT_CONFIG['disk_io_whitelist']))
+        
+        logging.info(f"Configuration loaded from {config_file}")
+        return config
+    except FileNotFoundError:
+        logging.warning(f"Configuration file {config_file} not found, using defaults")
+        return DEFAULT_CONFIG
+    except json.JSONDecodeError as e:
+        logging.error(f"Error parsing configuration file: {e}")
+        return DEFAULT_CONFIG
+
+def save_default_config(config_file='config.json'):
+    """Save default configuration to a JSON file."""
+    try:
+        with open(config_file, 'w') as f:
+            json.dump(DEFAULT_CONFIG, f, indent=4)
+        logging.info(f"Default configuration saved to {config_file}")
+        return True
+    except Exception as e:
+        logging.error(f"Failed to save configuration: {e}")
+        return False
+
+def parse_arguments():
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description='Process Monitor - Monitor system processes for high resource usage',
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    
+    parser.add_argument('--config', '-c', type=str, default='config.json',
+                        help='Configuration file path (default: config.json)')
+    parser.add_argument('--generate-config', action='store_true',
+                        help='Generate a default configuration file and exit')
+    parser.add_argument('--db', type=str, default='process_monitor.db',
+                        help='Database file path (default: process_monitor.db)')
+    parser.add_argument('--wait-time', '-w', type=int,
+                        help='Time to wait between scans in seconds (overrides config)')
+    parser.add_argument('--cpu-threshold', type=int,
+                        help='CPU usage threshold percentage (overrides config)')
+    parser.add_argument('--memory-threshold', type=int,
+                        help='Memory usage threshold percentage (overrides config)')
+    parser.add_argument('--export', '-e', type=str,
+                        help='Export database to CSV/JSON file and exit')
+    parser.add_argument('--log-level', type=str, choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+                        help='Logging level (default: INFO)')
+    parser.add_argument('--no-stats', action='store_true',
+                        help='Disable periodic statistics display')
+    
+    return parser.parse_args()
+
+def setup_logging(log_level='INFO'):
+    """Configure logging system."""
+    level = getattr(logging, log_level.upper(), logging.INFO)
+    logging.basicConfig(
+        level=level,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+
+def display_statistics():
+    """Display monitoring statistics."""
+    if stats['start_time'] is None:
+        return
+    
+    elapsed = time.time() - stats['start_time']
+    hours, remainder = divmod(int(elapsed), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    
+    print("\n" + "="*60)
+    print("MONITORING STATISTICS")
+    print("="*60)
+    print(f"Runtime: {hours:02d}:{minutes:02d}:{seconds:02d}")
+    print(f"High CPU events: {stats['high_cpu_events']}")
+    print(f"High Memory events: {stats['high_memory_events']}")
+    print(f"High Disk Write Rate events: {stats['high_disk_write_rate_events']}")
+    print(f"High Disk Read Rate events: {stats['high_disk_read_rate_events']}")
+    print(f"High Cumulative Disk events: {stats['high_cumulative_disk_events']}")
+    print(f"Network connections tracked: {stats['network_connections']}")
+    print("="*60 + "\n")
+    
+    stats['last_stats_display'] = time.time()
+
+def export_to_csv(db_path, output_file):
+    """Export database contents to CSV file."""
+    import csv
+    
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT * FROM process_events")
+        rows = cursor.fetchall()
+        
+        # Get column names
+        cursor.execute("PRAGMA table_info(process_events)")
+        columns = [col[1] for col in cursor.fetchall()]
+        
+        with open(output_file, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(columns)
+            writer.writerows(rows)
+        
+        conn.close()
+        print(f"Exported {len(rows)} records to {output_file}")
+        return True
+    except Exception as e:
+        print(f"Error exporting to CSV: {e}", file=sys.stderr)
+        return False
+
+def export_to_json(db_path, output_file):
+    """Export database contents to JSON file."""
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT * FROM process_events")
+        rows = cursor.fetchall()
+        
+        # Get column names
+        cursor.execute("PRAGMA table_info(process_events)")
+        columns = [col[1] for col in cursor.fetchall()]
+        
+        # Convert to list of dictionaries
+        records = [dict(zip(columns, row)) for row in rows]
+        
+        with open(output_file, 'w') as f:
+            json.dump(records, f, indent=2)
+        
+        conn.close()
+        print(f"Exported {len(records)} records to {output_file}")
+        return True
+    except Exception as e:
+        print(f"Error exporting to JSON: {e}", file=sys.stderr)
+        return False
 
 def is_admin():
     """Check if the script is running with administrative/root privileges."""
@@ -128,11 +307,12 @@ if hasattr(socket, 'AF_PACKET'):
 conn = None
 cursor = None
 
-def init_database():
+def init_database(db_path='process_monitor.db'):
     """Initialize the SQLite database connection and create tables."""
     global conn, cursor
-    conn = sqlite3.connect('process_monitor.db')
+    conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
+    logging.info(f"Database initialized: {db_path}")
     
     # Create the table if it doesn't exist
     cursor.execute('''
@@ -201,11 +381,13 @@ def monitor_processes():
             # Check for high resource usage
             if cpu_usage is not None and cpu_usage > high_cpu_threshold:
                 insert_event(proc, "High CPU", cpu_usage)
+                stats['high_cpu_events'] += 1
                 process_count += 1
                 should_investigate = True
 
             if memory_usage is not None and memory_usage > high_memory_threshold:
                 insert_event(proc, "High Memory", memory_usage)
+                stats['high_memory_events'] += 1
                 process_count += 1
                 should_investigate = True
 
@@ -229,6 +411,7 @@ def monitor_processes():
                     )
                     if exceeds_write:
                         insert_event(proc, "High Disk Write Rate", write_rate)
+                        stats['high_disk_write_rate_events'] += 1
                         process_count += 1
                         should_investigate = True
                     
@@ -239,6 +422,7 @@ def monitor_processes():
                     )
                     if exceeds_read:
                         insert_event(proc, "High Disk Read Rate", read_rate)
+                        stats['high_disk_read_rate_events'] += 1
                         process_count += 1
                         should_investigate = True
                 
@@ -248,6 +432,7 @@ def monitor_processes():
                     write_mb_cumulative = write_bytes / 1024 / 1024
                     if write_mb_cumulative > high_disk_cumulative_threshold:
                         insert_event(proc, "High Cumulative Disk Writes", write_mb_cumulative)
+                        stats['high_cumulative_disk_events'] += 1
                         cumulative_alerted_pids.add(pid)  # Mark as alerted
                         process_count += 1
                         should_investigate = True
@@ -299,6 +484,7 @@ def investigate_process(proc, process_count):
         
         for conn in connections:
             connection_count += 1
+            stats['network_connections'] += 1
             try:
                 # Extract address information using helper function
                 remote_ip, remote_port = get_address_info(conn.raddr)
@@ -419,23 +605,84 @@ def insert_event(proc, event_type, resource_usage, open_files=None, ip_connectio
     except Exception as e:
         print(f"\nUnexpected error inserting event: {e}", file=sys.stderr)
 
-# Main execution
-if __name__ == "__main__":
+def main():
+    """Main entry point for the process monitor."""
+    global wait_time, high_cpu_threshold, high_memory_threshold
+    
+    # Parse command-line arguments
+    args = parse_arguments()
+    
+    # Setup logging
+    log_level = args.log_level or DEFAULT_CONFIG.get('log_level', 'INFO')
+    setup_logging(log_level)
+    
+    # Handle generate-config option
+    if args.generate_config:
+        if save_default_config(args.config):
+            print(f"Default configuration saved to {args.config}")
+            sys.exit(0)
+        else:
+            sys.exit(1)
+    
+    # Handle export option
+    if args.export:
+        if not os.path.exists(args.db):
+            print(f"Database file '{args.db}' not found", file=sys.stderr)
+            sys.exit(1)
+        
+        if args.export.endswith('.csv'):
+            success = export_to_csv(args.db, args.export)
+        elif args.export.endswith('.json'):
+            success = export_to_json(args.db, args.export)
+        else:
+            print("Export file must have .csv or .json extension", file=sys.stderr)
+            success = False
+        
+        sys.exit(0 if success else 1)
+    
     # Check for administrative/root privileges
     if not is_admin():
         request_admin_privileges()
     
+    # Load configuration
+    config = load_config(args.config) if os.path.exists(args.config) else DEFAULT_CONFIG
+    
+    # Override config with command-line arguments if provided
+    if args.wait_time:
+        wait_time = args.wait_time
+        logging.info(f"Wait time overridden to {wait_time} seconds")
+    
+    if args.cpu_threshold:
+        high_cpu_threshold = args.cpu_threshold
+        logging.info(f"CPU threshold overridden to {high_cpu_threshold}%")
+    
+    if args.memory_threshold:
+        high_memory_threshold = args.memory_threshold
+        logging.info(f"Memory threshold overridden to {high_memory_threshold}%")
+    
+    show_stats = config.get('show_statistics', True) and not args.no_stats
+    stats_interval = config.get('statistics_interval', 60)
+    
     # Initialize database after privilege check
     try:
-        init_database()
+        init_database(args.db)
     except Exception as e:
-        print(f"\nFailed to initialize database: {e}", file=sys.stderr)
+        logging.error(f"Failed to initialize database: {e}")
         sys.exit(1)
     
     try:
-        print('Process Monitor started with elevated privileges.')
-        print('Press ctrl+c to exit.')
+        logging.info('Process Monitor started with elevated privileges.')
+        logging.info(f'Database: {args.db}')
+        logging.info(f'Configuration: CPU={high_cpu_threshold}%, Memory={high_memory_threshold}%, '
+                    f'Disk Write Rate={high_disk_write_rate_threshold} MB/s, '
+                    f'Disk Read Rate={high_disk_read_rate_threshold} MB/s, '
+                    f'Cumulative Disk={high_disk_cumulative_threshold} MB')
+        logging.info('Press Ctrl+C to exit.')
+        
+        stats['start_time'] = time.time()
+        stats['last_stats_display'] = time.time()
         iteration_count = 0
+        
         while True:
             monitor_processes()
             iteration_count += 1
@@ -446,20 +693,30 @@ if __name__ == "__main__":
                 if conn:
                     conn.commit()
             except sqlite3.Error as e:
-                print(f"\nDatabase commit error: {e}", file=sys.stderr)
+                logging.error(f"Database commit error: {e}")
+            
+            # Display statistics periodically
+            if show_stats and (time.time() - stats['last_stats_display']) >= stats_interval:
+                display_statistics()
             
             time.sleep(wait_time)
+            
     except KeyboardInterrupt:
-        print('\n\nSQLite database "process_monitor.db" has been created.')
-        print("Exiting ...")
+        logging.info('\nMonitoring stopped by user.')
+        if show_stats:
+            display_statistics()
     except Exception as e:
-        print(f"\nUnexpected error in main loop: {e}", file=sys.stderr)
+        logging.error(f"Unexpected error in main loop: {e}")
     finally:
         # Ensure database is properly closed
         try:
             if conn:
                 conn.commit()  # Final commit of any pending data
                 conn.close()
-                print("Database connection closed successfully.")
+                logging.info("Database connection closed successfully.")
         except Exception as e:
-            print(f"Error closing database: {e}", file=sys.stderr)
+            logging.error(f"Error closing database: {e}")
+
+# Main execution
+if __name__ == "__main__":
+    main()

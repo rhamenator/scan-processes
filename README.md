@@ -22,6 +22,11 @@ Without elevated privileges, some features (like disk I/O monitoring and network
 - **SQLite Database:** Stores events in a local SQLite database for easy querying and analysis.
 - **Real-time Monitoring:** Continuously monitors processes and reports events as they occur.
 - **Cross-Platform:** Works seamlessly on Windows, Linux, and macOS.
+- **Configuration File Support:** Use JSON configuration files for easy customization without editing code.
+- **Command-Line Interface:** Flexible CLI with options to override settings, export data, and more.
+- **Statistics Display:** View real-time monitoring statistics showing event counts and runtime.
+- **Data Export:** Export monitoring data to CSV or JSON format for analysis in other tools.
+- **Structured Logging:** Configurable logging levels (DEBUG, INFO, WARNING, ERROR) for better diagnostics.
 
 ## Requirements
 
@@ -95,9 +100,55 @@ The script creates an SQLite database named `process_monitor.db` with a table `p
 - `ip_address_type`: Type of IP address (Public, Private, Loopback, etc.)
 - `connection_family`: Connection family (IPv4, IPv6, etc.)
 
-## Customization
+## Command-Line Options
 
-You can modify the following parameters at the top of `scan_processes.py`:
+The script now supports flexible command-line options for easy customization:
+
+```bash
+python3 scan_processes.py [options]
+```
+
+**Available Options:**
+
+- `--config, -c <file>`: Specify a configuration file (default: `config.json`)
+- `--generate-config`: Generate a default configuration file and exit
+- `--db <file>`: Specify database file path (default: `process_monitor.db`)
+- `--wait-time, -w <seconds>`: Override scan interval
+- `--cpu-threshold <percentage>`: Override CPU threshold
+- `--memory-threshold <percentage>`: Override memory threshold
+- `--export, -e <file>`: Export database to CSV or JSON file
+- `--log-level <level>`: Set logging level (DEBUG, INFO, WARNING, ERROR)
+- `--no-stats`: Disable periodic statistics display
+- `--help, -h`: Show help message
+
+**Examples:**
+
+```bash
+# Generate a default configuration file
+python3 scan_processes.py --generate-config
+
+# Run with custom configuration file
+python3 scan_processes.py --config my_config.json
+
+# Override specific settings via command line
+python3 scan_processes.py --wait-time 5 --cpu-threshold 90
+
+# Export database to CSV
+python3 scan_processes.py --export results.csv
+
+# Run with debug logging and custom database
+python3 scan_processes.py --db my_monitor.db --log-level DEBUG
+```
+
+## Configuration File
+
+You can customize all monitoring parameters using a JSON configuration file. Generate a default configuration:
+
+```bash
+python3 scan_processes.py --generate-config
+```
+
+This creates a `config.json` file that you can edit with the following parameters:
 
 - `wait_time`: Interval in seconds between process scans (default: 10 seconds)
 - `high_cpu_threshold`: CPU usage percentage to trigger an alert (default: 80%)
@@ -105,28 +156,59 @@ You can modify the following parameters at the top of `scan_processes.py`:
 - `high_disk_write_rate_threshold`: Disk write speed in MB/s to trigger an alert (default: 50 MB/s)
 - `high_disk_read_rate_threshold`: Disk read speed in MB/s to trigger an alert (default: 100 MB/s)
 - `high_disk_cumulative_threshold`: Cumulative disk writes in MB to trigger an alert (default: 500 MB)
-- `disk_io_whitelist`: Set of process names to exclude from disk I/O monitoring (e.g., OneDrive, Google Drive)
+- `disk_io_whitelist`: Array of process names to exclude from disk I/O monitoring
+- `log_level`: Logging verbosity - DEBUG, INFO, WARNING, or ERROR (default: "INFO")
+- `show_statistics`: Enable/disable periodic statistics display (default: true)
+- `statistics_interval`: Seconds between statistics displays (default: 60)
 
 ### Disk I/O Whitelist
 
-The `disk_io_whitelist` set allows you to exclude known legitimate processes from disk I/O alerts. This is useful for processes like:
+The `disk_io_whitelist` allows you to exclude known legitimate processes from disk I/O alerts. This is useful for processes like:
 - Cloud storage sync clients (OneDrive, Google Drive, Dropbox)
 - Web browsers performing downloads
 - Backup software
 - Other applications with expected heavy disk activity
 
-To add a process to the whitelist, edit the `disk_io_whitelist` set in `scan_processes.py`:
+Edit the `disk_io_whitelist` array in your `config.json`:
 
-```python
-disk_io_whitelist = {
-    'onedrive.exe', 'onedrive',
-    'googledrivesync.exe', 'googledrivesync',
-    'dropbox.exe', 'dropbox',
-    'mybackup.exe',  # Add your custom processes here
+```json
+{
+    "disk_io_whitelist": [
+        "onedrive.exe", "onedrive",
+        "googledrivesync.exe", "googledrivesync",
+        "dropbox.exe", "dropbox",
+        "mybackup.exe"
+    ]
 }
 ```
 
 Process names are case-insensitive and should match the process name as shown by the system.
+
+## Data Export
+
+You can export the monitoring data from the database to CSV or JSON format:
+
+```bash
+# Export to CSV
+python3 scan_processes.py --export results.csv
+
+# Export to JSON
+python3 scan_processes.py --export results.json
+```
+
+This allows you to analyze the data in spreadsheet applications, create visualizations, or process it with other tools.
+
+## Statistics Display
+
+By default, the monitor displays periodic statistics showing:
+- Runtime duration
+- Count of high CPU events
+- Count of high memory events
+- Count of high disk write/read rate events
+- Count of cumulative disk events
+- Number of network connections tracked
+
+Statistics are displayed every 60 seconds (configurable via `statistics_interval` in config.json). Disable with `--no-stats` flag.
 
 ## Important Notes
 

@@ -1,0 +1,27 @@
+{
+    "wait_time": 10,
+    "high_cpu_threshold": 80,
+    "high_memory_threshold": 70,
+    "high_disk_write_rate_threshold": 50,
+    "high_disk_read_rate_threshold": 100,
+    "high_disk_cumulative_threshold": 500,
+    "disk_io_whitelist": [
+        "onedrive.exe",
+        "onedrive",
+        "googledrivesync.exe",
+        "googledrivesync",
+        "dropbox.exe",
+        "dropbox",
+        "backup",
+        "backupd",
+        "chrome.exe",
+        "firefox.exe",
+        "msedge.exe",
+        "chrome",
+        "firefox",
+        "msedge"
+    ],
+    "log_level": "INFO",
+    "show_statistics": true,
+    "statistics_interval": 60
+}
