@@ -409,7 +409,7 @@ def monitor_processes():
     Note: CPU measurements via process_iter use non-blocking mode and may not be
     accurate on first iteration. Subsequent iterations will have accurate measurements.
     """
-    global prev_io_counters, cleanup_counter  # noqa: F824
+    global prev_io_counters, cleanup_counter, cumulative_alerted_pids  # noqa: F824
     process_count = 0
     current_pids = set()
 
