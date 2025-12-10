@@ -112,6 +112,9 @@ You can modify the following parameters at the top of `scan_processes.py`:
   - Required for: disk I/O monitoring, network connections, and detailed process information
 - **Database Location:** The SQLite database (`process_monitor.db`) is created in the current working directory
 - **Continuous Monitoring:** The script runs continuously until interrupted with `Ctrl+C`
+- **Monitoring Behavior:** 
+  - CPU and memory usage are measured at each scan interval
+  - Disk write speed (MB/s) is calculated between consecutive scans, so disk alerts won't appear until the second iteration
 - **Performance Impact:** Monitoring can consume system resources; adjust `wait_time` if needed
 
 ## Troubleshooting
