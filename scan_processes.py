@@ -176,13 +176,17 @@ def monitor_processes():
                 if pid in prev_io_counters:
                     prev_write_bytes = prev_io_counters[pid]
                     bytes_written = write_bytes - prev_write_bytes
-                    # Calculate MB/s over the wait_time interval
-                    write_mb_per_sec = (bytes_written / 1024 / 1024) / wait_time
                     
-                    if write_mb_per_sec > high_disk_threshold:
-                        insert_event(proc, "High Disk Write", write_mb_per_sec)
-                        process_count += 1
-                        should_investigate = True
+                    # Handle counter reset (process restart with same PID or overflow)
+                    # If bytes_written is negative or wait_time is invalid, reset baseline
+                    if bytes_written >= 0 and wait_time > 0:
+                        # Calculate MB/s over the wait_time interval
+                        write_mb_per_sec = (bytes_written / 1024 / 1024) / wait_time
+                        
+                        if write_mb_per_sec > high_disk_threshold:
+                            insert_event(proc, "High Disk Write", write_mb_per_sec)
+                            process_count += 1
+                            should_investigate = True
                 
                 # Store current value for next iteration
                 prev_io_counters[pid] = write_bytes
