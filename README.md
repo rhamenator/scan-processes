@@ -25,7 +25,7 @@ Without elevated privileges, some features (like disk I/O monitoring and network
 
 ## Requirements
 
-- Python 3.6 or higher
+- Python 3.7 or higher (preferably 3.8+)
 - `psutil` library (installed via pip)
 
 ## Installation

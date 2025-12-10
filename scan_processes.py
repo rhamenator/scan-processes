@@ -6,6 +6,7 @@ import sqlite3
 import os
 import sys
 import platform
+import subprocess
 
 # Platform-specific imports
 if platform.system() == 'Windows':
@@ -36,8 +37,10 @@ def request_admin_privileges():
     if current_platform == 'Windows':
         # On Windows, try to re-launch the script with elevated privileges
         try:
+            # Use subprocess.list2cmdline to properly escape arguments with spaces
             # ShellExecuteW returns > 32 on success (Windows API behavior)
-            if ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(sys.argv), None, 1) > 32:
+            args = subprocess.list2cmdline(sys.argv)
+            if ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, args, None, 1) > 32:
                 sys.exit(0)
             else:
                 print("\n" + "="*70)
