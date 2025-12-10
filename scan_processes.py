@@ -10,7 +10,6 @@ import subprocess
 import argparse
 import json
 import logging
-import csv
 from datetime import datetime
 
 # Platform-specific imports
@@ -38,23 +37,6 @@ DEFAULT_CONFIG = {
     'statistics_interval': 60  # Show stats every 60 seconds
 }
 
-def normalize_whitelist(items):
-    """Normalize whitelist items to lowercase strings.
-    
-    Args:
-        items: List of whitelist entries (can be mixed types)
-        
-    Returns:
-        Set of normalized lowercase strings, excluding None and empty strings
-    """
-    normalized = set()
-    for item in items:
-        if item is not None:
-            item_str = str(item).strip()
-            if item_str:  # Only add non-empty strings
-                normalized.add(item_str.lower())
-    return normalized
-
 # Global configuration (will be loaded from file or defaults)
 wait_time = DEFAULT_CONFIG['wait_time']
 high_cpu_threshold = DEFAULT_CONFIG['high_cpu_threshold']
@@ -62,8 +44,7 @@ high_memory_threshold = DEFAULT_CONFIG['high_memory_threshold']
 high_disk_write_rate_threshold = DEFAULT_CONFIG['high_disk_write_rate_threshold']
 high_disk_read_rate_threshold = DEFAULT_CONFIG['high_disk_read_rate_threshold']
 high_disk_cumulative_threshold = DEFAULT_CONFIG['high_disk_cumulative_threshold']
-# Normalize whitelist to lowercase for case-insensitive matching
-disk_io_whitelist = normalize_whitelist(DEFAULT_CONFIG['disk_io_whitelist'])
+disk_io_whitelist = set(DEFAULT_CONFIG['disk_io_whitelist'])
 connection_count = 0
 
 # Track previous I/O counters for rate calculation
@@ -95,26 +76,16 @@ def load_config(config_file):
     
     try:
         with open(config_file, 'r') as f:
-            user_config = json.load(f)
+            config = json.load(f)
         
-        # Merge user config with defaults (user config takes precedence)
-        config = {**DEFAULT_CONFIG, **user_config}
-        
-        # Update global variables from merged config
-        wait_time = config['wait_time']
-        high_cpu_threshold = config['high_cpu_threshold']
-        high_memory_threshold = config['high_memory_threshold']
-        high_disk_write_rate_threshold = config['high_disk_write_rate_threshold']
-        high_disk_read_rate_threshold = config['high_disk_read_rate_threshold']
-        high_disk_cumulative_threshold = config['high_disk_cumulative_threshold']
-        
-        # Handle whitelist with validation and lowercase normalization
-        whitelist_value = config['disk_io_whitelist']
-        if isinstance(whitelist_value, list):
-            disk_io_whitelist = normalize_whitelist(whitelist_value)
-        else:
-            logging.warning("Config value for 'disk_io_whitelist' is not a list; using default whitelist.")
-            disk_io_whitelist = normalize_whitelist(DEFAULT_CONFIG['disk_io_whitelist'])
+        # Update global variables from config
+        wait_time = config.get('wait_time', DEFAULT_CONFIG['wait_time'])
+        high_cpu_threshold = config.get('high_cpu_threshold', DEFAULT_CONFIG['high_cpu_threshold'])
+        high_memory_threshold = config.get('high_memory_threshold', DEFAULT_CONFIG['high_memory_threshold'])
+        high_disk_write_rate_threshold = config.get('high_disk_write_rate_threshold', DEFAULT_CONFIG['high_disk_write_rate_threshold'])
+        high_disk_read_rate_threshold = config.get('high_disk_read_rate_threshold', DEFAULT_CONFIG['high_disk_read_rate_threshold'])
+        high_disk_cumulative_threshold = config.get('high_disk_cumulative_threshold', DEFAULT_CONFIG['high_disk_cumulative_threshold'])
+        disk_io_whitelist = set(config.get('disk_io_whitelist', DEFAULT_CONFIG['disk_io_whitelist']))
         
         logging.info(f"Configuration loaded from {config_file}")
         return config
@@ -174,12 +145,7 @@ def setup_logging(log_level='INFO'):
     )
 
 def display_statistics():
-    """Display monitoring statistics.
-    
-    Note: Uses print() instead of logging to provide clean, user-facing
-    formatted output without log timestamps/levels. Statistics can be
-    disabled with --no-stats flag.
-    """
+    """Display monitoring statistics."""
     if stats['start_time'] is None:
         return
     
@@ -203,6 +169,8 @@ def display_statistics():
 
 def export_to_csv(db_path, output_file):
     """Export database contents to CSV file."""
+    import csv
+    
     try:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
@@ -378,7 +346,7 @@ def check_io_rate(bytes_current, bytes_previous, threshold, wait_time):
         wait_time: Time interval in seconds
         
     Returns:
-        Tuple of (exceeds_threshold, rate_in_mb_per_sec), where rate_in_mb_per_sec is in MB/s.
+        Tuple of (exceeds_threshold, rate_in_mb_per_sec)
     """
     bytes_delta = bytes_current - bytes_previous
     
@@ -667,7 +635,7 @@ def main():
         elif args.export.endswith('.json'):
             success = export_to_json(args.db, args.export)
         else:
-            print("Export file must have .csv or .json extension (e.g., results.csv or results.json)", file=sys.stderr)
+            print("Export file must have .csv or .json extension", file=sys.stderr)
             success = False
         
         sys.exit(0 if success else 1)
@@ -676,8 +644,8 @@ def main():
     if not is_admin():
         request_admin_privileges()
     
-    # Load configuration (load_config handles missing files)
-    config = load_config(args.config)
+    # Load configuration
+    config = load_config(args.config) if os.path.exists(args.config) else DEFAULT_CONFIG
     
     # Override config with command-line arguments if provided
     if args.wait_time:
