@@ -45,7 +45,8 @@ high_memory_threshold = DEFAULT_CONFIG['high_memory_threshold']
 high_disk_write_rate_threshold = DEFAULT_CONFIG['high_disk_write_rate_threshold']
 high_disk_read_rate_threshold = DEFAULT_CONFIG['high_disk_read_rate_threshold']
 high_disk_cumulative_threshold = DEFAULT_CONFIG['high_disk_cumulative_threshold']
-disk_io_whitelist = set(DEFAULT_CONFIG['disk_io_whitelist'])
+# Normalize whitelist to lowercase for case-insensitive matching
+disk_io_whitelist = set(item.lower() for item in DEFAULT_CONFIG['disk_io_whitelist'])
 connection_count = 0
 
 # Track previous I/O counters for rate calculation
@@ -91,7 +92,7 @@ def load_config(config_file):
         high_disk_cumulative_threshold = config['high_disk_cumulative_threshold']
         
         # Handle whitelist with validation and lowercase normalization
-        whitelist_value = config.get('disk_io_whitelist', DEFAULT_CONFIG['disk_io_whitelist'])
+        whitelist_value = config['disk_io_whitelist']
         if isinstance(whitelist_value, list):
             # Normalize all entries to lowercase for case-insensitive matching
             disk_io_whitelist = set(item.lower() for item in whitelist_value)
