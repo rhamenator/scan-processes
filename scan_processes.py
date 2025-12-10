@@ -35,6 +35,12 @@ disk_io_whitelist = {
 # Track previous I/O counters for rate calculation
 prev_io_counters = {}
 
+# Track processes that have already triggered cumulative alerts to avoid duplicates
+cumulative_alerted_pids = set()
+
+# Cleanup counter to avoid running cleanup on every iteration
+cleanup_counter = 0
+
 def is_admin():
     """Check if the script is running with administrative/root privileges."""
     try:
@@ -150,13 +156,34 @@ def init_database():
     ''')
     conn.commit()
 
+def check_io_rate(bytes_current, bytes_previous, threshold, wait_time):
+    """Helper function to check if I/O rate exceeds threshold.
+    
+    Args:
+        bytes_current: Current byte count
+        bytes_previous: Previous byte count
+        threshold: Threshold in MB/s
+        wait_time: Time interval in seconds
+        
+    Returns:
+        Tuple of (exceeds_threshold, rate_in_mb_per_sec)
+    """
+    bytes_delta = bytes_current - bytes_previous
+    
+    # Handle counter resets (negative values) and check for valid wait_time
+    if bytes_delta < 0 or wait_time <= 0:
+        return False, 0.0
+    
+    rate_mb_per_sec = (bytes_delta / 1024 / 1024) / wait_time
+    return rate_mb_per_sec > threshold, rate_mb_per_sec
+
 def monitor_processes():
     """Monitor all processes for high resource usage and network connections.
     
     Note: CPU measurements via process_iter use non-blocking mode and may not be 
     accurate on first iteration. Subsequent iterations will have accurate measurements.
     """
-    global prev_io_counters
+    global prev_io_counters, cleanup_counter, cumulative_alerted_pids
     process_count = 0
     current_pids = set()
   
@@ -194,29 +221,34 @@ def monitor_processes():
                 # Rate-based monitoring: Calculate write/read rates between iterations
                 if pid in prev_io_counters:
                     prev_write_bytes, prev_read_bytes = prev_io_counters[pid]
-                    bytes_written = write_bytes - prev_write_bytes
-                    bytes_read = read_bytes - prev_read_bytes
                     
-                    # Handle counter resets (negative values) and check for valid wait_time
-                    if bytes_written >= 0 and wait_time > 0:
-                        write_mb_per_sec = (bytes_written / 1024 / 1024) / wait_time
-                        if write_mb_per_sec > high_disk_write_rate_threshold:
-                            insert_event(proc, "High Disk Write Rate", write_mb_per_sec)
-                            process_count += 1
-                            should_investigate = True
+                    # Check write rate using helper function
+                    exceeds_write, write_rate = check_io_rate(
+                        write_bytes, prev_write_bytes, 
+                        high_disk_write_rate_threshold, wait_time
+                    )
+                    if exceeds_write:
+                        insert_event(proc, "High Disk Write Rate", write_rate)
+                        process_count += 1
+                        should_investigate = True
                     
-                    if bytes_read >= 0 and wait_time > 0:
-                        read_mb_per_sec = (bytes_read / 1024 / 1024) / wait_time
-                        if read_mb_per_sec > high_disk_read_rate_threshold:
-                            insert_event(proc, "High Disk Read Rate", read_mb_per_sec)
-                            process_count += 1
-                            should_investigate = True
+                    # Check read rate using helper function
+                    exceeds_read, read_rate = check_io_rate(
+                        read_bytes, prev_read_bytes,
+                        high_disk_read_rate_threshold, wait_time
+                    )
+                    if exceeds_read:
+                        insert_event(proc, "High Disk Read Rate", read_rate)
+                        process_count += 1
+                        should_investigate = True
                 
                 # Cumulative monitoring: Check total writes since process start
-                if write_bytes > 0:
+                # Only alert once per process to avoid duplicate notifications
+                if write_bytes > 0 and pid not in cumulative_alerted_pids:
                     write_mb_cumulative = write_bytes / 1024 / 1024
                     if write_mb_cumulative > high_disk_cumulative_threshold:
                         insert_event(proc, "High Cumulative Disk Writes", write_mb_cumulative)
+                        cumulative_alerted_pids.add(pid)  # Mark as alerted
                         process_count += 1
                         should_investigate = True
                 
@@ -235,10 +267,15 @@ def monitor_processes():
             print(f"\nError monitoring process: {e}", file=sys.stderr)
             continue
     
-    # Clean up terminated processes from prev_io_counters to prevent memory leak
-    terminated_pids = set(prev_io_counters.keys()) - current_pids
-    for pid in terminated_pids:
-        del prev_io_counters[pid]
+    # Clean up terminated processes periodically to prevent memory leak
+    # Only run cleanup every 10 iterations to reduce overhead
+    cleanup_counter += 1
+    if cleanup_counter >= 10:
+        terminated_pids = set(prev_io_counters.keys()) - current_pids
+        for pid in terminated_pids:
+            del prev_io_counters[pid]
+            cumulative_alerted_pids.discard(pid)  # Also clean up alert tracking
+        cleanup_counter = 0
 
 def investigate_process(proc, process_count):
     global connection_count
